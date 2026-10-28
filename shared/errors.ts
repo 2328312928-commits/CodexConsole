@@ -1,0 +1,66 @@
+/**
+ * Every error code the API can return. The web UI translates `error.<code>`
+ * through the i18n dictionaries, so adding a code here forces a translation.
+ */
+export const ERROR_CODES = [
+  'bad_request',
+  'not_found',
+  'internal',
+  'rate_limited',
+  'payload_too_large',
+  'forbidden_host',
+  'forbidden_origin',
+  'csrf_header_missing',
+  'setup_required',
+  'device_required',
+  'login_required',
+  'admin_required',
+  'invalid_credentials',
+  'login_locked',
+  'invalid_pairing_code',
+  'invalid_totp',
+  'session_not_found',
+  'turn_in_progress',
+  'no_active_turn',
+  'prompt_empty',
+  'prompt_too_long',
+  'too_many_attachments',
+  'codex_unavailable',
+  'codex_not_signed_in',
+  'codex_error',
+  'approval_not_found',
+  'thread_not_found',
+  'thread_already_imported',
+  'path_invalid',
+  'path_outside_workspace',
+  'workspace_unavailable',
+  'file_not_found',
+  'file_exists',
+  'file_too_large',
+  'not_a_directory',
+  'not_a_file',
+  'upload_quota_exceeded',
+  'device_not_found',
+  'invalid_api_key',
+  'api_key_revoked',
+  'api_key_expired',
+  'api_key_not_found',
+  'ip_not_allowed',
+  'scope_missing',
+  'quota_exceeded',
+  'too_many_turns',
+  'setting_not_allowed',
+  'question_not_found',
+  'unknown_command',
+  'turn_not_found',
+  'mcp_error',
+  'mcp_server_not_found',
+  'mcp_server_exists',
+  'invalid_name',
+] as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[number];
+
+export interface ApiErrorBody {
+  error: { code: ErrorCode; retryAfterSec?: number; detail?: string };
+}

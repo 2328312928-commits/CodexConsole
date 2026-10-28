@@ -1,0 +1,31 @@
+# Codex Console behind Caddy with automatic HTTPS (Let's Encrypt).
+# Needs a DNS name pointing at this machine and ports 80/443 reachable.
+# This makes the console reachable from the internet (it stays protected by
+# device token + password + authenticator code). Tailscale keeps it private instead.
+#
+# In the console's .env:
+#   CC_PUBLIC_ORIGIN=https://console.example.com
+#   CC_TRUST_PROXY=loopback
+
+console.example.com {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8787 {
+		# Stream server-sent events (live Codex output) immediately.
+		flush_interval -1
+	}
+
+	log {
+		output file /var/log/caddy/codex-console.log
+	}
+}
+
+# Optional: the public API (/v1, API keys only) on its own hostname.
+# In .env: CC_API_ENABLED=true, CC_API_PUBLIC_ORIGIN=https://api.example.com,
+#          CC_API_PROXY_PROTOCOL=off, CC_API_TRUST_PROXY=loopback
+#
+# api.example.com {
+# 	reverse_proxy 127.0.0.1:8788 {
+# 		flush_interval -1
+# 	}
+# }

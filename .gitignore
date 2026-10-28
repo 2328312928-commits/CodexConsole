@@ -1,0 +1,33 @@
+# dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# local configuration and secrets: never commit these
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-*
+*.sqlite
+*.pem
+*.key
+*.crt
+*.p12
+certs/
+secrets.json
+dev-credentials.json
+*.sqlite-*
+# the console's data dir, if ever pointed inside the repo
+.codexconsole/
+
+# local tool settings
+.claude/
+
+# generated Codex protocol reference (npm run codex:check -- --schema)
+.codex-schema/
+
+# misc
+*.log
+.DS_Store

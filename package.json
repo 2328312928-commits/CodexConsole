@@ -1,0 +1,47 @@
+{
+  "name": "codex-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private, single-owner web console for your own Codex CLI (ChatGPT plan login).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build --config web/vite.config.ts",
+    "build:server": "tsc -p server/tsconfig.json",
+    "start": "node dist/server/index.js",
+    "setup": "node dist/server/cli/setup.js",
+    "codex:check": "node dist/server/cli/codex-check.js",
+    "dev": "node scripts/dev.mjs",
+    "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.5",
+    "@fastify/multipart": "10.1.6",
+    "@fastify/static": "10.1.7",
+    "@node-rs/argon2": "2.2.2",
+    "@openai/codex": "0.164.0",
+    "fastify": "5.12.7",
+    "qrcode": "1.5.4",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "dompurify": "3.4.17",
+    "marked": "18.1.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "4.1.12"
+  }
+}

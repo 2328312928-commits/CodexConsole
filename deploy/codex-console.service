@@ -1,0 +1,27 @@
+# systemd *user* service for Codex Console (runs as you, so Codex uses your ~/.codex login).
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/codex-console.service ~/.config/systemd/user/
+#   # edit WorkingDirectory below if the project is not in ~/CodexConsole
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now codex-console
+#   loginctl enable-linger "$USER"     # keep it running after you log out
+# Logs:
+#   journalctl --user -u codex-console -f
+
+[Unit]
+Description=Codex Console (private remote console for Codex)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/CodexConsole
+# Settings come from .env in WorkingDirectory. Node 22.13+ must be on PATH (or use an absolute path).
+ExecStart=/usr/bin/env node dist/server/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
