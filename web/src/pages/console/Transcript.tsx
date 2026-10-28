@@ -1,5 +1,5 @@
-import { memo, useMemo, useState } from 'react';
-import type { ApprovalDecision, ApprovalInfo, MediaRef, PendingQuestion, SessionInfo, TranscriptEntry, TurnEndData, TurnKind } from '../../../../shared/api.js';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import type { ApprovalDecision, ApprovalInfo, AutoReview, MediaRef, PendingQuestion, SessionInfo, TranscriptEntry, TurnEndData, TurnKind } from '../../../../shared/api.js';
 import type { FileUpdateChange, ThreadItem, TurnPlanStep, UserInput } from '../../../../shared/codex.js';
 import { fileUrl, post } from '../../api';
 import { ErrorAlert, Spinner } from '../../components/ui';
@@ -41,8 +41,50 @@ export function mediaUrl(ref: MediaRef, sessionId: string): string {
 }
 
 function Markdown({ text, base }: { text: string; base: string | null }) {
+  const { t } = useI18n();
   const html = useMemo(() => renderMarkdown(text, base), [text, base]);
-  return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+  const ref = useRef<HTMLDivElement>(null);
+  // A copy button on every code block (added after render: the HTML itself stays sanitized text).
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    for (const pre of root.querySelectorAll('pre')) {
+      if (pre.querySelector('.code-copy')) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'code-copy';
+      btn.textContent = t('common.copy');
+      btn.addEventListener('click', () => {
+        void navigator.clipboard?.writeText(pre.querySelector('code')?.textContent ?? pre.textContent ?? '').then(() => {
+          btn.textContent = t('common.copied');
+          setTimeout(() => (btn.textContent = t('common.copy')), 1400);
+        });
+      });
+      pre.appendChild(btn);
+    }
+  }, [html, t]);
+  return <div className="markdown" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function CopyText({ text }: { text: string }) {
+  const { t } = useI18n();
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn ghost icon small msg-copy"
+      aria-label={t('common.copy')}
+      title={done ? t('common.copied') : t('common.copy')}
+      onClick={() =>
+        void navigator.clipboard?.writeText(text).then(() => {
+          setDone(true);
+          setTimeout(() => setDone(false), 1400);
+        })
+      }
+    >
+      <Icon name={done ? 'check' : 'copy'} size={14} />
+    </button>
+  );
 }
 
 export function MediaTile({ media, sessionId, single }: { media: MediaRef; sessionId: string; single?: boolean }) {
@@ -172,10 +214,17 @@ export const ItemView = memo(function ItemView({
         <div className="msg-agent">
           <Markdown text={String(item.text ?? '')} base={base} />
           {partial ? <div className="muted">{t('turn.partial')}</div> : null}
+          {done && item.text ? (
+            <div className="msg-actions">
+              <CopyText text={String(item.text)} />
+            </div>
+          ) : null}
         </div>
       );
     case 'reasoning': {
-      const summary = (item.summary as string[] | undefined)?.filter(Boolean).join('\n\n') ?? '';
+      // The summary, or Codex's raw reasoning when it streams that instead.
+      const summary =
+        (item.summary as string[] | undefined)?.filter(Boolean).join('\n\n') || (item.content as string[] | undefined)?.filter(Boolean).join('\n\n') || '';
       if (!summary) return done ? null : <Spinner label={t('turn.thinking')} />;
       return (
         <Collapsible head={<><Icon name="brain" size={15} /><span className="label">{t('turn.thinking')}</span>{!done ? <span className="spinner" /> : null}</>}>
@@ -187,7 +236,7 @@ export const ItemView = memo(function ItemView({
     }
     case 'plan':
       return (
-        <div className="item-card">
+        <div className="item-card plan-card">
           <div className="item-head">
             <Icon name="check" size={15} />
             <span className="label">{t('turn.plan')}</span>
@@ -361,18 +410,74 @@ function TurnFooter({ end, turnId, ctx }: { end: TurnEndData; turnId: string | n
 const OUTCOME_KEYS = {
   accept: 'approval.outcome.accept',
   acceptForSession: 'approval.outcome.acceptForSession',
+  acceptAlways: 'approval.outcome.acceptAlways',
+  applyNetworkRule: 'approval.outcome.applyNetworkRule',
   decline: 'approval.outcome.decline',
+  cancel: 'approval.outcome.cancel',
   timeout: 'approval.outcome.timeout',
   cancelled: 'approval.outcome.cancelled',
 } as const;
+const ALLOWED_OUTCOMES = new Set(['accept', 'acceptForSession', 'acceptAlways', 'applyNetworkRule']);
 
 function ApprovalLog({ data }: { data: { kind: string; command: string | null; outcome: keyof typeof OUTCOME_KEYS; auto?: boolean } }) {
   const { t } = useI18n();
   return (
     <div className="approval-log">
-      <Icon name={data.outcome === 'accept' || data.outcome === 'acceptForSession' ? 'check' : 'x'} size={14} />
+      <Icon name={ALLOWED_OUTCOMES.has(data.outcome) ? 'check' : 'x'} size={14} />
       <span>{data.auto ? t('approval.outcome.auto') : t(OUTCOME_KEYS[data.outcome] ?? 'approval.outcome.decline')}</span>
       {data.command ? <code className="cmd">{data.command}</code> : null}
+    </div>
+  );
+}
+
+const REVIEW_KEYS = {
+  inProgress: 'review.auto.inProgress',
+  approved: 'review.auto.approved',
+  denied: 'review.auto.denied',
+  timedOut: 'review.auto.timedOut',
+  aborted: 'review.auto.aborted',
+} as const;
+
+/** Codex's automatic reviewer deciding an approval request; a denial can be allowed once. */
+function AutoReviewCard({ review, ctx, live }: { review: AutoReview; ctx: ViewContext; live?: boolean }) {
+  const { t } = useI18n();
+  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
+  const [error, setError] = useState<unknown>(null);
+  const tone = review.status === 'approved' ? 'good' : review.status === 'denied' ? 'bad' : review.status === 'inProgress' ? 'info' : 'warn';
+  return (
+    <div className={`review-card ${tone}`}>
+      <div className="review-head">
+        <Icon name="shield" size={15} />
+        <span className="label">{t(REVIEW_KEYS[review.status] ?? 'review.auto.inProgress')}</span>
+        {review.status === 'inProgress' ? <span className="spinner" /> : null}
+        {review.riskLevel ? <span className={`badge ${tone}`}>{t('review.auto.risk', { level: review.riskLevel })}</span> : null}
+        {review.action ? <code className="cmd">{review.action}</code> : null}
+      </div>
+      {review.rationale ? <div className="review-why">{review.rationale}</div> : null}
+      {review.status === 'denied' && live !== false && state !== 'done' ? (
+        <div className="row">
+          <button
+            type="button"
+            className="btn small"
+            disabled={state === 'busy'}
+            onClick={async () => {
+              setState('busy');
+              setError(null);
+              try {
+                await post(`/api/sessions/${ctx.session.id}/reviews/${review.reviewId}/approve`);
+                setState('done');
+              } catch (err) {
+                setError(err);
+                setState('idle');
+              }
+            }}
+          >
+            {t('review.auto.approveOnce')}
+          </button>
+        </div>
+      ) : null}
+      {state === 'done' ? <div className="muted small-text">{t('review.auto.approvedOnce')}</div> : null}
+      <ErrorAlert error={error} />
     </div>
   );
 }
@@ -428,6 +533,7 @@ export const History = memo(function History({ entries, ctx }: { entries: Transc
               if (e.kind === 'media') return <MediaGrid key={e.id} media={e.data.files as MediaRef[]} sessionId={ctx.session.id} />;
               if (e.kind === 'approval') return <ApprovalLog key={e.id} data={e.data} />;
               if (e.kind === 'question') return <QuestionLog key={e.id} data={e.data} />;
+              if (e.kind === 'autoReview') return <AutoReviewCard key={e.id} review={e.data as AutoReview} ctx={ctx} />;
               if (e.kind === 'steer') return echoed.has(String(e.data.text)) ? null : <SteerBubble key={e.id} text={String(e.data.text)} />;
               if (!e.data?.item) return null;
               return <ItemView key={e.id} item={e.data.item} media={e.data.media ?? []} done partial={e.data.partial} ctx={ctx} />;
@@ -444,11 +550,11 @@ export function ApprovalCard({ approval, ctx }: { approval: ApprovalInfo; ctx: V
   const { t, lang } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const decide = async (decision: ApprovalDecision) => {
+  const decide = async (decision: ApprovalDecision, ruleIndex?: number) => {
     setBusy(true);
     setError(null);
     try {
-      await post(`/api/approvals/${approval.id}`, { decision });
+      await post(`/api/approvals/${approval.id}`, { decision, ...(ruleIndex !== undefined ? { ruleIndex } : {}) });
     } catch (err) {
       setError(err);
       setBusy(false);
@@ -478,8 +584,21 @@ export function ApprovalCard({ approval, ctx }: { approval: ApprovalInfo; ctx: V
         <button type="button" className="btn" disabled={busy} onClick={() => void decide('acceptForSession')}>
           {t('approval.acceptForSession')}
         </button>
+        {approval.proposedRule ? (
+          <button type="button" className="btn" disabled={busy} onClick={() => void decide('acceptAlways')} title={approval.proposedRule.join(' ')}>
+            {t('approval.acceptAlways', { rule: approval.proposedRule.join(' ') })}
+          </button>
+        ) : null}
+        {approval.networkRules?.map((r, i) => (
+          <button key={`${r.action}:${r.host}`} type="button" className="btn" disabled={busy} onClick={() => void decide('applyNetworkRule', i)}>
+            {r.action === 'deny' ? t('approval.denyHost', { host: r.host }) : t('approval.allowHost', { host: r.host })}
+          </button>
+        ))}
         <button type="button" className="btn danger" disabled={busy} onClick={() => void decide('decline')}>
           {t('approval.decline')}
+        </button>
+        <button type="button" className="btn ghost danger" disabled={busy} onClick={() => void decide('cancel')} title={t('approval.cancelHint')}>
+          {t('approval.cancel')}
         </button>
         <span className="muted" style={{ fontSize: 12 }}>
           {t('approval.expires', { time: fmtRelative(lang, t, approval.expiresAt) })}
@@ -490,7 +609,7 @@ export function ApprovalCard({ approval, ctx }: { approval: ApprovalInfo; ctx: V
   );
 }
 
-export function LiveTurnView({ live, approvals, questions, ctx }: { live: LiveTurn; approvals: ApprovalInfo[]; questions: PendingQuestion[]; ctx: ViewContext }) {
+export function LiveTurnView({ live, approvals, questions, reviews, ctx }: { live: LiveTurn; approvals: ApprovalInfo[]; questions: PendingQuestion[]; reviews: AutoReview[]; ctx: ViewContext }) {
   const { t } = useI18n();
   const user = live.items.find((l) => l.item.type === 'userMessage');
   const rest = live.items.filter((l) => l !== user);
@@ -516,6 +635,9 @@ export function LiveTurnView({ live, approvals, questions, ctx }: { live: LiveTu
         .map((s, i) => (
           <SteerBubble key={i} text={s} />
         ))}
+      {reviews.map((r) => (
+        <AutoReviewCard key={r.reviewId} review={r} ctx={ctx} live />
+      ))}
       {approvals.map((a) => (
         <ApprovalCard key={a.id} approval={a} ctx={ctx} />
       ))}

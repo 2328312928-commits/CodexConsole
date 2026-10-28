@@ -6,6 +6,7 @@ import type { LoginSessionRow, LoginSessionStore } from '../auth/loginSessions.j
 import type { OwnerStore } from '../auth/owner.js';
 import type { CodexBridge } from '../codex/bridge.js';
 import type { McpManager } from '../codex/mcp.js';
+import type { PromptQueue } from '../codex/queue.js';
 import type { SessionOps } from '../codex/sessionOps.js';
 import type { TurnManager } from '../codex/turns.js';
 import type { AppConfig } from '../config.js';
@@ -54,6 +55,7 @@ export interface AppDeps {
   turns: TurnManager;
   ops: SessionOps;
   mcp: McpManager;
+  queue: PromptQueue;
   keys: ApiKeyStore;
   appVersion: string;
 }

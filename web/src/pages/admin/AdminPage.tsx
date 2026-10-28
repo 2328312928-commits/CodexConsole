@@ -6,6 +6,7 @@ import { useI18n } from '../../i18n';
 import { Icon } from '../../icons';
 import { navigate, usePath } from '../../router';
 import { ApiKeysTab } from './ApiKeysTab';
+import { CodexTab } from './CodexTab';
 import { DevicesTab } from './DevicesTab';
 import { OverviewTab } from './OverviewTab';
 import { RequestsTab } from './RequestsTab';
@@ -13,7 +14,7 @@ import { SecurityTab, TransfersTab } from './LogTabs';
 import { McpTab } from './McpTab';
 import { SettingsTab } from './SettingsTab';
 
-const TABS = ['overview', 'requests', 'devices', 'keys', 'mcp', 'files', 'security', 'settings'] as const;
+const TABS = ['overview', 'codex', 'requests', 'devices', 'keys', 'mcp', 'files', 'security', 'settings'] as const;
 type Tab = (typeof TABS)[number];
 
 function Unlock({ onAuth }: { onAuth: (s: AuthState) => void }) {
@@ -84,6 +85,7 @@ export function AdminPage({ auth, onAuth }: { auth: AuthState; onAuth: (s: AuthS
   const onAdminLost = () => setExpired(true);
   const labels: Record<Tab, string> = {
     overview: t('adminTab.overview'),
+    codex: t('adminTab.codex'),
     requests: t('adminTab.requests'),
     devices: t('adminTab.devices'),
     keys: t('adminTab.keys'),
@@ -104,6 +106,7 @@ export function AdminPage({ auth, onAuth }: { auth: AuthState; onAuth: (s: AuthS
         </div>
         <div role="tabpanel">
           {tab === 'overview' ? <OverviewTab onAdminLost={onAdminLost} /> : null}
+          {tab === 'codex' ? <CodexTab onAdminLost={onAdminLost} /> : null}
           {tab === 'requests' ? <RequestsTab onAdminLost={onAdminLost} /> : null}
           {tab === 'devices' ? <DevicesTab currentDeviceId={auth.device?.id ?? null} onAdminLost={onAdminLost} /> : null}
           {tab === 'keys' ? <ApiKeysTab onAdminLost={onAdminLost} /> : null}

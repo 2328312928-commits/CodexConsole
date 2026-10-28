@@ -36,6 +36,15 @@ export const SECURITY_EVENT_KINDS = [
   'mcp_login_started',
   'shell_command',
   'codex_config_changed',
+  'codex_login_started',
+  'codex_logout',
+  'codex_features_changed',
+  'plugin_installed',
+  'plugin_uninstalled',
+  'memory_reset',
+  'agent_config_imported',
+  'feedback_sent',
+  'limit_reset_used',
 ] as const;
 export type SecurityEventKind = (typeof SECURITY_EVENT_KINDS)[number];
 
@@ -69,7 +78,14 @@ export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 export const CODEX_STATES = ['starting', 'ready', 'restarting', 'failed', 'stopped'] as const;
 export type CodexState = (typeof CODEX_STATES)[number];
 
-export type ApprovalDecision = 'accept' | 'acceptForSession' | 'decline';
+/**
+ * How an approval is answered. `acceptAlways` also saves Codex's proposed rule for similar commands;
+ * `applyNetworkRule` applies one of its proposed network rules; `cancel` declines and stops the turn.
+ */
+export type ApprovalDecision = 'accept' | 'acceptForSession' | 'acceptAlways' | 'applyNetworkRule' | 'decline' | 'cancel';
+export const APPROVAL_DECISIONS: readonly ApprovalDecision[] = ['accept', 'acceptForSession', 'acceptAlways', 'applyNetworkRule', 'decline', 'cancel'];
+/** Decisions that never widen what Codex may do. */
+export const SAFE_APPROVAL_DECISIONS: readonly ApprovalDecision[] = ['decline', 'cancel'];
 export type ApprovalKind = 'command' | 'fileChange' | 'permissions';
 
 export interface AuthState {
@@ -103,7 +119,21 @@ export interface ModelInfo {
   isDefault: boolean;
   defaultEffort: string;
   efforts: string[];
+  /** Codex's own description of each reasoning level for this model. */
+  effortOptions: Array<{ effort: string; description: string }>;
+  /** Optional speed tiers (e.g. `priority` = fast). */
+  serviceTiers: Array<{ id: string; name: string; description: string }>;
+  defaultServiceTier: string | null;
+  inputModalities: string[];
 }
+
+export const REASONING_SUMMARIES = ['auto', 'concise', 'detailed', 'none'] as const;
+export type ReasoningSummary = (typeof REASONING_SUMMARIES)[number];
+export const WEB_SEARCH_MODES = ['disabled', 'cached', 'indexed', 'live'] as const;
+export type WebSearchMode = (typeof WEB_SEARCH_MODES)[number];
+/** Who answers approval requests: you, or Codex's automatic reviewer. */
+export type ApprovalsReviewer = 'user' | 'auto_review';
+export type CollaborationModeKind = 'default' | 'plan';
 
 export interface SessionInfo {
   id: string;
@@ -128,18 +158,35 @@ export interface SessionInfo {
 export interface SessionSettings {
   model: string | null;
   effort: string | null;
+  summary: ReasoningSummary | null;
+  /** Speed tier id from the model (e.g. `priority`); null = standard. */
+  serviceTier: string | null;
+  mode: CollaborationModeKind | null;
   sandbox: SandboxMode | null;
   approvalPolicy: AskForApproval | null;
+  approvalsReviewer: ApprovalsReviewer | null;
   networkAccess: boolean | null;
+  webSearch: WebSearchMode | null;
+  /** Extra writable folders (workspace-relative), like `codex --add-dir`. */
+  writableRoots: string[] | null;
+  memory: boolean | null;
 }
 
 /** What a turn will actually run with once defaults and caps are applied. */
 export interface EffectiveSettings {
   model: string | null;
   effort: string | null;
+  summary: ReasoningSummary | null;
+  serviceTier: string | null;
+  mode: CollaborationModeKind;
   sandbox: SandboxMode;
   approvalPolicy: AskForApproval;
+  approvalsReviewer: ApprovalsReviewer;
   networkAccess: boolean;
+  webSearch: WebSearchMode | null;
+  /** Absolute paths. */
+  writableRoots: string[];
+  memory: boolean | null;
 }
 
 export interface MediaRef {
@@ -173,6 +220,10 @@ export interface ApprovalInfo {
   grantRoot: string | null;
   permissions: unknown;
   changes: FileUpdateChange[] | null;
+  /** Command prefix Codex proposes to always allow (for `acceptAlways`). */
+  proposedRule: string[] | null;
+  /** Network rules Codex proposes (for `applyNetworkRule`). */
+  networkRules: Array<{ action: string; host: string }> | null;
   createdAt: number;
   expiresAt: number;
 }
@@ -188,6 +239,39 @@ export interface LiveItem {
 /** `auto`: a turn Codex started by itself, e.g. to keep working on a thread goal. */
 export type TurnKind = 'prompt' | 'review' | 'compact' | 'shell' | 'auto';
 
+/** A prompt waiting to run after the current turn. */
+export interface QueuedPrompt {
+  id: string;
+  text: string;
+  attachmentCount: number;
+  createdAt: number;
+}
+
+/** Codex's automatic reviewer looking at an approval request. */
+export interface AutoReview {
+  reviewId: string;
+  turnId: string | null;
+  status: 'inProgress' | 'approved' | 'denied' | 'timedOut' | 'aborted';
+  riskLevel: string | null;
+  rationale: string | null;
+  action: string;
+}
+
+export interface BackgroundTerminal {
+  processId: string;
+  command: string;
+  cwd: string;
+  osPid: number | null;
+  cpuPercent: number | null;
+  rssKb: number | null;
+}
+
+export interface SavedPrompt {
+  name: string;
+  description: string;
+  content: string;
+}
+
 export interface ActiveTurnSnapshot {
   requestId: string;
   kind: TurnKind;
@@ -199,6 +283,7 @@ export interface ActiveTurnSnapshot {
   diff: string | null;
   approvals: ApprovalInfo[];
   questions: PendingQuestion[];
+  reviews: AutoReview[];
   statusMessage: string | null;
   usage: TokenUsageBreakdown | null;
 }
@@ -218,7 +303,7 @@ export type ServerEvent =
   | { type: 'snapshot'; turn: ActiveTurnSnapshot | null }
   | { type: 'turn_started'; requestId: string; turnId: string | null; prompt: string; startedAt: number; kind: TurnKind }
   | { type: 'item_started'; turnId: string; item: ThreadItem }
-  | { type: 'item_delta'; turnId: string; itemId: string; field: 'text' | 'summary' | 'output'; index?: number; delta: string }
+  | { type: 'item_delta'; turnId: string; itemId: string; field: 'text' | 'summary' | 'output' | 'content'; index?: number; delta: string }
   | { type: 'item_completed'; turnId: string; item: ThreadItem; media: MediaRef[] }
   | { type: 'plan'; turnId: string; explanation: string | null; steps: TurnPlanStep[] }
   | { type: 'diff'; turnId: string; diff: string }
@@ -232,7 +317,9 @@ export type ServerEvent =
   | { type: 'question_resolved'; questionId: string; outcome: 'answered' | 'declined' | 'timeout' | 'cancelled' }
   | { type: 'item_progress'; turnId: string; itemId: string; message: string }
   | { type: 'goal_updated'; goal: ThreadGoal | null }
-  | { type: 'transcript_changed' };
+  | { type: 'transcript_changed' }
+  | { type: 'queue_updated'; queue: QueuedPrompt[]; paused: boolean }
+  | { type: 'auto_review'; review: AutoReview };
 
 export interface ThreadGoal {
   objective: string;
@@ -466,6 +553,8 @@ export type CommandResult =
   | { kind: 'mcp'; servers: McpServerView[] }
   | { kind: 'goal'; goal: ThreadGoal | null }
   | { kind: 'help'; commands: Array<{ name: string; args: string }> }
+  | { kind: 'terminals'; terminals: BackgroundTerminal[] }
+  | { kind: 'info'; text: string }
   | { kind: 'done' };
 
 // ---- API keys ----

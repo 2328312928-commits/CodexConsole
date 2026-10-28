@@ -3,6 +3,7 @@ import type { AskForApproval, SandboxMode } from '../../shared/codex.js';
 import { ApiError } from '../lib/errors.js';
 import type { EventContext } from '../services/audit.js';
 import type { SessionRow } from '../services/sessions.js';
+import type { Workspace } from '../services/workspace.js';
 import type { McpManager } from './mcp.js';
 import { INIT_PROMPT, type KeyCaps, type SessionOps } from './sessionOps.js';
 import type { KeyContext, TurnManager } from './turns.js';
@@ -25,8 +26,28 @@ export const SLASH_COMMANDS: Array<{ name: string; args: string; scope: ApiKeySc
   { name: '/status', args: '', scope: 'prompt' },
   { name: '/mcp', args: '', scope: 'mcp:read' },
   { name: '/goal', args: '[objective | clear]', scope: 'sessions' },
+  { name: '/plan', args: '[on | off]', scope: 'settings' },
+  { name: '/permissions', args: 'read-only | auto | full-access', scope: 'settings' },
+  { name: '/rename', args: '<title>', scope: 'sessions' },
+  { name: '/archive', args: '', scope: 'sessions' },
+  { name: '/unarchive', args: '', scope: 'sessions' },
+  { name: '/cd', args: '<folder>', scope: 'sessions' },
+  { name: '/pwd', args: '', scope: 'prompt' },
+  { name: '/ps', args: '', scope: 'prompt' },
+  { name: '/stop', args: '', scope: 'sessions' },
+  { name: '/summary', args: '', scope: 'prompt' },
+  { name: '/clear', args: '', scope: 'prompt' },
   { name: '!', args: '<shell command>', scope: 'shell' },
 ];
+
+/** `/permissions` presets, as in the Codex TUI. */
+const PERMISSION_PRESETS: Record<string, { sandbox: SandboxMode; approvalPolicy: AskForApproval }> = {
+  'read-only': { sandbox: 'read-only', approvalPolicy: 'on-request' },
+  auto: { sandbox: 'workspace-write', approvalPolicy: 'on-request' },
+  'full-access': { sandbox: 'danger-full-access', approvalPolicy: 'never' },
+};
+
+const SUMMARY_PROMPT = 'Summarize this conversation so far: what was asked, what was done, the current state, and any open questions. Be brief.';
 
 const APPROVALS: AskForApproval[] = ['untrusted', 'on-request', 'never'];
 const SANDBOXES: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
@@ -40,6 +61,10 @@ export interface CommandContext {
   /** Present when an API key runs the command. */
   key: { caps: KeyCaps; context: KeyContext; hasScope: (s: ApiKeyScope) => boolean } | null;
   newSession: (title: string) => Promise<SessionInfo>;
+  /** Where `/cd` may go (the key's folder for API keys). */
+  folderRoot?: Workspace;
+  rename: (title: string) => Promise<void>;
+  archive: (archived: boolean) => Promise<void>;
 }
 
 export function parseReviewTarget(args: string): ReviewTarget {
@@ -79,7 +104,44 @@ export async function runCommand(c: CommandContext, input: string): Promise<Comm
     case '/help':
       return { kind: 'help', commands: SLASH_COMMANDS.map(({ name: n, args: a }) => ({ name: n, args: a })) };
     case '/new':
+    case '/clear':
       return { kind: 'session', session: await c.newSession(args) };
+    case '/plan': {
+      const on = args === '' ? c.ops.effective(c.session, caps).mode !== 'plan' : args === 'on';
+      if (args && args !== 'on' && args !== 'off') throw new ApiError(400, 'bad_request', 'on | off');
+      const row = c.ops.updateSettings(c.session, { mode: on ? 'plan' : 'default' }, caps);
+      return { kind: 'settings', session: c.ops.info(row), effective: c.ops.effective(row, caps) };
+    }
+    case '/permissions': {
+      const preset = PERMISSION_PRESETS[args];
+      if (!preset) throw new ApiError(400, 'bad_request', Object.keys(PERMISSION_PRESETS).join(' | '));
+      const row = c.ops.updateSettings(c.session, preset, caps);
+      return { kind: 'settings', session: c.ops.info(row), effective: c.ops.effective(row, caps) };
+    }
+    case '/rename':
+      if (!args) throw new ApiError(400, 'bad_request', 'a title is required');
+      await c.rename(args.slice(0, 200));
+      return { kind: 'done' };
+    case '/archive':
+    case '/unarchive':
+      await c.archive(name === '/archive');
+      return { kind: 'done' };
+    case '/cd': {
+      if (!args) throw new ApiError(400, 'bad_request', 'a folder is required');
+      const row = await c.ops.changeFolder(c.session, args, c.folderRoot);
+      return { kind: 'session', session: c.ops.info(row) };
+    }
+    case '/pwd':
+      return { kind: 'info', text: c.session.cwd };
+    case '/ps':
+      return { kind: 'terminals', terminals: await c.ops.terminals(c.session) };
+    case '/stop':
+      await c.ops.stopTerminal(c.session, null);
+      return { kind: 'done' };
+    case '/summary': {
+      const r = await c.turns.startTurn({ session: c.session, ctx: c.ctx, text: SUMMARY_PROMPT, attachments: [], settings: c.ops.effective(c.session, caps), apiKey });
+      return { kind: 'turn', ...r };
+    }
     case '/fork':
       return { kind: 'session', session: c.ops.info(await c.ops.fork(c.session, args || null, c.ctx, caps)) };
     case '/undo':

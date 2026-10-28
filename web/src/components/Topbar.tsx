@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import type { AuthState } from '../../../shared/api.js';
 import { limitSeverity, useCodexStatus } from '../codexStatus';
+import { getTheme, setTheme, type Theme } from '../theme';
 import { useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { navigate, usePath } from '../router';
@@ -15,7 +17,7 @@ function CodexPill() {
   return (
     <span className="status-pill" title={status.version ? `codex ${status.version}` : undefined}>
       <span className={`dot ${tone}`} aria-hidden="true" />
-      <span className="hide-mobile">{t('codex.statusLabel')}</span> {label}
+      {label}
       {primary ? (
         <span className={`mini-meter hide-mobile ${limitSeverity(primary.usedPercent)}`} title={t('codex.limits')}>
           <span className="m-track">
@@ -25,6 +27,30 @@ function CodexPill() {
         </span>
       ) : null}
     </span>
+  );
+}
+
+const NEXT_THEME: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
+const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' } as const;
+
+function ThemeSwitch() {
+  const { t } = useI18n();
+  const [theme, set] = useState<Theme>(getTheme);
+  const label = `${t('theme.label')}: ${t(`theme.${theme}`)}`;
+  return (
+    <button
+      type="button"
+      className="btn ghost icon small"
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        const next = NEXT_THEME[theme];
+        setTheme(next);
+        set(next);
+      }}
+    >
+      <Icon name={THEME_ICON[theme]} size={16} />
+    </button>
   );
 }
 
@@ -56,6 +82,7 @@ export function Topbar({ auth, onSignOut }: { auth: AuthState; onSignOut?: () =>
       ) : null}
       <span className="spacer" />
       {loggedIn ? <CodexPill /> : null}
+      <ThemeSwitch />
       <LangSwitch />
       {loggedIn ? (
         <button type="button" className="btn ghost small" onClick={onSignOut} aria-label={t('nav.signOut')} title={t('nav.signOut')}>

@@ -5,6 +5,7 @@ import { LoginSessionStore } from './auth/loginSessions.js';
 import { OwnerStore } from './auth/owner.js';
 import { CodexBridge, type BridgeLogger } from './codex/bridge.js';
 import { McpManager } from './codex/mcp.js';
+import { PromptQueue } from './codex/queue.js';
 import { SessionOps } from './codex/sessionOps.js';
 import { TurnManager } from './codex/turns.js';
 import type { AppConfig } from './config.js';
@@ -85,7 +86,7 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
     },
     keys: stores.keys,
   });
-  const ops = new SessionOps({ bridge, turns, sessions, settings, audit: stores.audit });
+  const ops = new SessionOps({ bridge, turns, sessions, settings, audit: stores.audit, workspace });
   // Turns Codex starts by itself run under the session's settings and, for API-key sessions, the key's caps.
   turns.setAdoptionContext((session) => {
     const key = session.api_key_id ? stores.keys.get(session.api_key_id) : undefined;
@@ -96,6 +97,7 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
     };
   });
   const mcp = new McpManager(bridge, config.codex.bin);
+  const queue = new PromptQueue({ turns, ops, sessions, keys: stores.keys, logger: opts.logger });
   const queries = new AdminQueries(db);
   bridge.on('rateLimits', (snap) => queries.recordRateLimits(snap));
 
@@ -131,6 +133,7 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
     turns,
     ops,
     mcp,
+    queue,
     appVersion: version,
     async stop() {
       for (const t of timers) clearInterval(t);

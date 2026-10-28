@@ -3,9 +3,18 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { CodexStatusInfo, CodexThreadSummary, ServerEvent } from '../../../shared/api.js';
+import {
+  APPROVAL_DECISIONS,
+  REASONING_SUMMARIES,
+  WEB_SEARCH_MODES,
+  type ApprovalDecision,
+  type CodexStatusInfo,
+  type CodexThreadSummary,
+  type ServerEvent,
+} from '../../../shared/api.js';
 import { TESTED_CODEX_VERSION, type UserInput } from '../../../shared/codex.js';
 import type { LoginSessionRow } from '../../auth/loginSessions.js';
+import type { SessionRow } from '../../services/sessions.js';
 import { runCommand } from '../../codex/commands.js';
 import { TurnManager, type Attachment } from '../../codex/turns.js';
 import { ApiError } from '../../lib/errors.js';
@@ -21,10 +30,34 @@ export const settingsBody = z
   .object({
     model: z.string().max(100).nullable().optional(),
     effort: z.string().max(40).nullable().optional(),
+    summary: z.enum(REASONING_SUMMARIES).nullable().optional(),
+    serviceTier: z.string().max(40).nullable().optional(),
+    mode: z.enum(['default', 'plan']).nullable().optional(),
     sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).nullable().optional(),
     approvalPolicy: z.enum(['untrusted', 'on-request', 'never']).nullable().optional(),
+    approvalsReviewer: z.enum(['user', 'auto_review']).nullable().optional(),
     networkAccess: z.boolean().nullable().optional(),
+    webSearch: z.enum(WEB_SEARCH_MODES).nullable().optional(),
+    writableRoots: z.array(z.string().max(4096)).max(20).nullable().optional(),
+    memory: z.boolean().nullable().optional(),
   })
+  .strict();
+
+/** Per-turn choices a prompt can carry; they are kept as the session's settings. */
+export const turnSettingsBody = {
+  model: z.string().max(100).nullable().optional(),
+  effort: z.string().max(40).nullable().optional(),
+  summary: z.enum(REASONING_SUMMARIES).nullable().optional(),
+  serviceTier: z.string().max(40).nullable().optional(),
+  mode: z.enum(['default', 'plan']).nullable().optional(),
+};
+
+export const decisionBody = z
+  .object({ decision: z.enum(APPROVAL_DECISIONS as [ApprovalDecision, ...ApprovalDecision[]]), ruleIndex: z.number().int().min(0).max(20).optional() })
+  .strict();
+
+export const feedbackBody = z
+  .object({ classification: z.enum(['bug', 'bad_result', 'good_result', 'other']), reason: z.string().max(4000).nullable().optional(), includeLogs: z.boolean().default(false) })
   .strict();
 
 export const reviewBody = z
@@ -117,7 +150,15 @@ export async function buildPromptInput(
 }
 
 export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void {
-  const { sessions, turns, bridge, workspace, config, limiter, requests, audit, media, devices, db, ops, mcp } = deps;
+  const { sessions, turns, bridge, workspace, config, limiter, requests, audit, media, devices, db, ops, mcp, queue } = deps;
+
+  /** Sending a prompt to an archived session brings it (and its Codex thread) back. */
+  const unarchive = async (s: SessionRow) => {
+    sessions.setArchived(s.id, false);
+    s.archived_at = null;
+    if (s.thread_id) await bridge.request('thread/unarchive', { threadId: s.thread_id }).catch(() => undefined);
+    turns.emitSessionUpdated(s.id);
+  };
 
   const getSession = (id: string) => {
     const s = sessions.get(id);
@@ -204,12 +245,8 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
       })
       .strict()
       .parse(req.body);
-    if (body.title !== undefined) {
-      const title = body.title.trim();
-      sessions.rename(s.id, title, title === '');
-      if (s.thread_id && title) await turns.renameThread(s.thread_id, title).catch(() => undefined);
-    }
-    if (body.archived !== undefined) sessions.setArchived(s.id, body.archived);
+    if (body.title !== undefined) await ops.rename(s, body.title);
+    if (body.archived !== undefined) await ops.archive(s, body.archived);
     if (body.model !== undefined || body.effort !== undefined) ops.updateSettings(s, { model: body.model, effort: body.effort });
     turns.emitSessionUpdated(s.id);
     return { session: ops.info(sessions.get(s.id)!) };
@@ -217,15 +254,85 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
 
   app.patch('/api/sessions/:id/settings', async (req) => {
     const s = getSession(idParam.parse(req.params).id);
-    const row = ops.updateSettings(s, settingsBody.parse(req.body));
+    const body = settingsBody.parse(req.body);
+    if (body.writableRoots !== undefined) body.writableRoots = await ops.checkWritableRoots(body.writableRoots);
+    const row = ops.updateSettings(s, body);
     return { session: ops.info(row), effective: ops.effective(row) };
   });
 
+  // ---- queue: prompts sent while Codex is busy ----
+
+  app.get('/api/sessions/:id/queue', async (req) => queue.list(getSession(idParam.parse(req.params).id).id));
+
+  app.post('/api/sessions/:id/queue', async (req) => {
+    const s = getSession(idParam.parse(req.params).id);
+    const body = z
+      .object({
+        text: z.string().max(config.limits.maxPromptChars * 4),
+        attachments: z.array(z.string().max(4096)).max(20).default([]),
+        mentions: z.array(z.string().max(4096)).max(20).default([]),
+        skills: z.array(z.string().max(200)).max(10).default([]),
+        imageUrls: z.array(z.string().max(4096)).max(10).default([]),
+      })
+      .strict()
+      .parse(req.body);
+    if (!body.text.trim() && body.attachments.length + body.mentions.length + body.skills.length + body.imageUrls.length === 0) throw new ApiError(400, 'prompt_empty');
+    if ([...body.text].length > config.limits.maxPromptChars) throw new ApiError(413, 'prompt_too_long');
+    const { attachments, extra } = await buildPromptInput(workspace, body);
+    extra.push(...(await ops.skillInputs(s.cwd, body.skills)));
+    return { queued: queue.add(s.id, { text: body.text, attachments, extraInput: extra, keyId: null, ctx: eventCtx(req) }) };
+  });
+
+  app.delete('/api/sessions/:id/queue/:itemId', async (req) => {
+    const { id, itemId } = z.object({ id: idParam.shape.id, itemId: z.string().max(100) }).parse(req.params);
+    queue.remove(getSession(id).id, itemId);
+    return { ok: true };
+  });
+
+  app.post('/api/sessions/:id/queue/resume', async (req) => {
+    queue.resume(getSession(idParam.parse(req.params).id).id);
+    return { ok: true };
+  });
+
+  // ---- background terminals (`/ps`, `/stop`) ----
+
+  app.get('/api/sessions/:id/terminals', async (req) => ({ terminals: await ops.terminals(getSession(idParam.parse(req.params).id)) }));
+
+  app.post('/api/sessions/:id/terminals/stop', async (req) => {
+    const s = getSession(idParam.parse(req.params).id);
+    const { processId } = z.object({ processId: z.string().max(200).nullable() }).strict().parse(req.body);
+    await ops.stopTerminal(s, processId);
+    return { ok: true };
+  });
+
+  app.post('/api/sessions/:id/folder', async (req) => {
+    const s = getSession(idParam.parse(req.params).id);
+    const { path: rel } = z.object({ path: z.string().max(4096) }).strict().parse(req.body);
+    return { session: ops.info(await ops.changeFolder(s, rel)) };
+  });
+
+  app.post('/api/sessions/:id/feedback', async (req) => {
+    const s = getSession(idParam.parse(req.params).id);
+    const body = feedbackBody.parse(req.body);
+    await ops.feedback(s, { classification: body.classification, reason: body.reason ?? null, includeLogs: body.includeLogs }, eventCtx(req));
+    return { ok: true };
+  });
+
+  app.post('/api/sessions/:id/reviews/:reviewId/approve', async (req) => {
+    const { id, reviewId } = z.object({ id: idParam.shape.id, reviewId: z.string().max(200) }).parse(req.params);
+    await turns.approveDenied(getSession(id).id, reviewId, eventCtx(req));
+    return { ok: true };
+  });
+
+  app.get('/api/codex/prompts', async () => ({ prompts: await ops.savedPrompts() }));
+
   app.delete('/api/sessions/:id', async (req) => {
     const s = getSession(idParam.parse(req.params).id);
-    const { archiveThread } = z.object({ archiveThread: z.enum(['0', '1']).optional() }).parse(req.query);
+    const { archiveThread, deleteThread } = z.object({ archiveThread: z.enum(['0', '1']).optional(), deleteThread: z.enum(['0', '1']).optional() }).parse(req.query);
     if (turns.isRunning(s.id)) throw new ApiError(409, 'turn_in_progress');
-    if (archiveThread === '1' && s.thread_id) await turns.archiveThread(s.thread_id).catch(() => undefined);
+    if (deleteThread === '1' && s.thread_id) await bridge.request('thread/delete', { threadId: s.thread_id }).catch(() => undefined);
+    else if (archiveThread === '1' && s.thread_id) await turns.archiveThread(s.thread_id).catch(() => undefined);
+    queue.clear(s.id);
     sessions.delete(s.id);
     await media.removeSession(s.id);
     return { ok: true };
@@ -257,8 +364,7 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
         mentions: z.array(z.string().max(4096)).max(20).default([]),
         skills: z.array(z.string().max(200)).max(10).default([]),
         imageUrls: z.array(z.string().max(4096)).max(10).default([]),
-        model: z.string().max(100).nullable().optional(),
-        effort: z.string().max(40).nullable().optional(),
+        ...turnSettingsBody,
       })
       .strict()
       .parse(req.body);
@@ -288,8 +394,11 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
 
     const { attachments, extra } = await buildPromptInput(workspace, body);
     extra.push(...(await ops.skillInputs(s.cwd, body.skills)));
+    await ops.warm();
     let session = s;
-    if (body.model !== undefined || body.effort !== undefined) session = ops.updateSettings(s, { model: body.model, effort: body.effort });
+    const { model, effort, summary, serviceTier, mode } = body;
+    if ([model, effort, summary, serviceTier, mode].some((v) => v !== undefined)) session = ops.updateSettings(s, { model, effort, summary, serviceTier, mode });
+    if (session.archived_at !== null) await unarchive(session);
     return turns.startTurn({ session, ctx: eventCtx(req), text: body.text, attachments, extraInput: extra, settings: ops.effective(session) });
   });
 
@@ -342,6 +451,9 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
         ctx: eventCtx(req),
         key: null,
         newSession: async (title) => ops.info(await newConsoleSession(title, req.auth.device!.id)),
+        folderRoot: workspace,
+        rename: (title) => ops.rename(s, title),
+        archive: (archived) => ops.archive(s, archived),
       },
       command,
     );
@@ -377,8 +489,8 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
 
   app.post('/api/approvals/:id', async (req) => {
     const { id } = idParam.parse(req.params);
-    const { decision } = z.object({ decision: z.enum(['accept', 'acceptForSession', 'decline']) }).strict().parse(req.body);
-    turns.decide(id, decision, eventCtx(req));
+    const { decision, ruleIndex } = decisionBody.parse(req.body);
+    turns.decide(id, decision, eventCtx(req), ruleIndex);
     return { ok: true };
   });
 
@@ -408,6 +520,8 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
     };
     res.write('retry: 3000\n\n');
     send({ type: 'snapshot', turn: turns.snapshot(s.id) });
+    const queued = queue.list(s.id);
+    if (queued.queue.length) send({ type: 'queue_updated', ...queued });
     const listener = (sessionId: string, ev: ServerEvent) => {
       if (sessionId === s.id) send(ev);
     };

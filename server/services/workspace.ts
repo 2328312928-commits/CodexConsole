@@ -131,6 +131,23 @@ export class Workspace {
     return path.relative(this.realRoot, resolved).split(path.sep).join('/');
   }
 
+  /** Absolute form of a workspace-relative path (lexical: no symlink check), or null if invalid. */
+  absOf(rel: string): string | null {
+    try {
+      return path.join(this.realRoot, ...Workspace.segments(rel));
+    } catch {
+      return null;
+    }
+  }
+
+  /** A folder that exists inside the workspace, following symlinks only within it. */
+  async folder(rel: unknown): Promise<{ abs: string; rel: string }> {
+    const r = await this.resolve(rel);
+    if (!r.exists) throw new ApiError(404, 'file_not_found', r.rel);
+    if (!(await fsp.stat(r.abs)).isDirectory()) throw new ApiError(400, 'not_a_directory', r.rel);
+    return { abs: await fsp.realpath(r.abs), rel: r.rel };
+  }
+
   static segments(rel: unknown): string[] {
     if (typeof rel !== 'string' || rel.length > 4096 || rel.includes('\0') || rel.includes('\\')) throw pathInvalid();
     const segs = rel.split('/').filter((s) => s !== '' && s !== '.');

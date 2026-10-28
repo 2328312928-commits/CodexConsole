@@ -128,7 +128,8 @@ A key only sees sessions it created.
 | `GET /sessions/:id` | `prompt` | `{ session, effective, turn }`: effective settings and the running turn, if any |
 | `DELETE /sessions/:id` | `sessions` | Removes it from the console (files stay) |
 | `GET /sessions/:id/history?before=&limit=` | `prompt` | Stored transcript entries, oldest first, paged by entry id |
-| `PATCH /sessions/:id/settings` | `settings` | Any of `model`, `effort`, `sandbox`, `approvalPolicy`, `networkAccess`; `null` = console default. Above the key's caps → `403 setting_not_allowed` |
+| `PATCH /sessions/:id/settings` | `settings` | Any of `model`, `effort`, `summary` (`auto`/`concise`/`detailed`/`none`), `serviceTier` (e.g. `priority`), `mode` (`default`/`plan`), `sandbox`, `approvalPolicy`, `networkAccess`, `webSearch` (`disabled`/`cached`/`live`), `memory`; `null` = default. Above the key's caps → `403 setting_not_allowed` (keys can't use the automatic reviewer, extra writable folders, or web search without network) |
+| `POST /sessions/:id/folder` | `sessions` | `{ "path" }`: move the session to another folder inside the key's folder (`/cd`) |
 | `GET /sessions/:id/status` | `prompt` | Effective settings, context window, token totals, goal, usage limits, pending approvals/questions |
 | `GET /sessions/:id/diff` | `prompt` | `{ turnDiff, gitDiff, gitError }`: the last turn's diff, and `git diff HEAD` run inside Codex's read-only sandbox |
 | `GET /sessions/:id/skills` | `prompt` | Skills available in the session folder |
@@ -146,13 +147,18 @@ A key only sees sessions it created.
   "imageUrls": ["https://example.com/screenshot.png"],
   "model": "gpt-5.5",
   "effort": "high",
+  "summary": "concise",
+  "serviceTier": "priority",
+  "mode": "plan",
+  "outputSchema": { "type": "object", "properties": { "answer": { "type": "string" } }, "required": ["answer"] },
   "wait": true,
   "timeoutSec": 300
 }
 ```
 
 - `files` are attached (images are sent as images). `mentions` point Codex at files or folders. `skills` are skill names from `/skills`. `imageUrls` must be `https://`, and need a key with network access: Codex downloads them itself.
-- `model` / `effort` also need the `settings` scope, and are stored on the session.
+- `model`, `effort`, `summary`, `serviceTier` and `mode` also need the `settings` scope, and are stored on the session. `GET /models` lists each model's reasoning levels and speed tiers.
+- `outputSchema` constrains the final answer to a JSON Schema (like `codex exec --output-schema`).
 - Without `wait`: `202 { requestId, turnId, status: "running" }` right away.
 - With `wait`: `200` and a [turn result](#turn-results) when it finishes, or `202` with the partial result when `timeoutSec` (default 120, max `CC_API_MAX_WAIT_SEC`) runs out.
 - One prompt per session at a time (`409 turn_in_progress`).
@@ -162,6 +168,10 @@ A key only sees sessions it created.
 | `GET /sessions/:id/turns/:requestId?wait=<sec>` | `prompt` | The turn result; waits up to `wait` seconds for it to finish |
 | `POST /sessions/:id/steer` | `prompt` | `{ "text" }`: add guidance to the running turn |
 | `POST /sessions/:id/interrupt` | `prompt` | Stop the running turn |
+| `GET/POST /sessions/:id/queue` | `prompt` | List, or add a prompt (same body as `/turns`, without the options) that runs after the current turn |
+| `DELETE /sessions/:id/queue/:itemId`, `POST /sessions/:id/queue/resume` | `prompt` | Remove a queued prompt; continue a queue paused by a failed or stopped turn |
+| `GET /sessions/:id/terminals` | `prompt` | Background terminals Codex started (`/ps`) |
+| `POST /sessions/:id/terminals/stop` | `sessions` | `{ "processId" }`, or `null` for all (`/stop`) |
 | `POST /sessions/:id/command` | `prompt` | `{ "command": "/compact" }`: see [slash commands](#slash-commands). Each command also checks its own scope |
 | `POST /sessions/:id/review` | `sessions` | `{ "target": { "type": "uncommittedChanges" } }`, or `baseBranch` + `branch`, `commit` + `sha`, `custom` + `instructions` |
 | `POST /sessions/:id/compact` | `sessions` | Summarise the conversation to free context |
@@ -181,7 +191,7 @@ Allowing an approval can take Codex past the sandbox (an escalated command, an e
 | Method & path | Scope | Body |
 | --- | --- | --- |
 | `GET /approvals` | `approvals` | `{ approvals, questions }` pending in the key's sessions |
-| `POST /approvals/:id` | `approvals` | `{ "decision": "accept" \| "acceptForSession" \| "decline" }` |
+| `POST /approvals/:id` | `approvals` | `{ "decision": "accept" \| "acceptForSession" \| "acceptAlways" \| "applyNetworkRule" \| "decline" \| "cancel", "ruleIndex"? }`. `acceptAlways` saves Codex's proposed rule (`proposedRule`); `applyNetworkRule` applies `networkRules[ruleIndex]`; `cancel` declines and stops the turn |
 | `POST /questions/:id` | `approvals` | Codex's own questions: `{ "kind": "input", "answers": { "<questionId>": ["answer"] } }`. MCP forms/links: `{ "kind": "elicitation", "action": "accept" \| "decline" \| "cancel", "content"?: {…} }` |
 
 Unanswered approvals are declined after the approval timeout (10 minutes by default); unanswered questions are skipped.
@@ -271,6 +281,12 @@ curl -N "$BASE/sessions/$SID/events" -H "$AUTH"
 | `/status` | `prompt` | Session status |
 | `/mcp` | `mcp:read` | MCP servers and tools |
 | `/goal [objective \| clear]` | `sessions` | Show, set or clear the goal |
+| `/plan [on \| off]` | `settings` | Plan mode |
+| `/permissions read-only\|auto\|full-access` | `settings` | Sandbox and approval presets |
+| `/rename <title>`, `/archive`, `/unarchive` | `sessions` | |
+| `/cd <folder>`, `/pwd` | `sessions` / `prompt` | Working folder |
+| `/ps`, `/stop` | `prompt` / `sessions` | Background terminals |
+| `/summary`, `/clear` | `prompt` | Summarise now; new session |
 | `!<command>` | `shell` ⚠ | Shell command in the session folder |
 
 The response is `{ "kind": … }`: `turn` (with `requestId`), `session`, `settings`, `status`, `diff`, `skills`, `models`, `mcp`, `goal`, `help` or `done`.

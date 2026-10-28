@@ -10,6 +10,7 @@ import { handleError } from './errorHandler.js';
 import { CSP } from './headers.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerApiKeyRoutes } from './routes/apiKeys.js';
+import { registerCodexAdminRoutes } from './routes/codexAdmin.js';
 import { registerMcpRoutes } from './routes/mcp.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerFileRoutes } from './routes/files.js';
@@ -163,6 +164,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: FastifyServerOpti
   registerFileRoutes(app, deps);
   registerAdminRoutes(app, deps);
   registerApiKeyRoutes(app, deps);
+  registerCodexAdminRoutes(app, deps);
   registerMcpRoutes(app, deps);
   app.get('/api/health', { config: { auth: 'public' } }, async () => ({ ok: true }));
 

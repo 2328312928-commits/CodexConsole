@@ -13,6 +13,15 @@ export function Spinner({ label }: { label?: string }) {
   );
 }
 
+/** A small ⓘ whose explanation shows on hover, so forms stay free of hint text. */
+export function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="info-tip" title={text} aria-label={text} role="img">
+      <Icon name="info" size={13} />
+    </span>
+  );
+}
+
 export function ErrorAlert({ error }: { error: unknown }) {
   const { t } = useI18n();
   if (!error) return null;

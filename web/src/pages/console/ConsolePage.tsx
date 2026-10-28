@@ -208,6 +208,7 @@ export function ConsolePage() {
             void load();
           }}
           onOpenSidebar={() => setSidebarOpen(true)}
+          onImport={() => setDialog('import')}
         />
       ) : (
         <div className="main">

@@ -1,96 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AdminSettings, AuthState, CodexDefaults, CodexStatusInfo, ModelInfo } from '../../../../shared/api.js';
+import type { AdminSettings, AuthState, CodexStatusInfo } from '../../../../shared/api.js';
 import type { AskForApproval, SandboxMode } from '../../../../shared/codex.js';
-import { get, post, put } from '../../api';
-import { ErrorAlert, Spinner } from '../../components/ui';
+import { post, put } from '../../api';
+import { ErrorAlert, InfoTip, Spinner } from '../../components/ui';
 import { useI18n } from '../../i18n';
 import { Icon } from '../../icons';
 import { useAdminData } from './common';
 
 const SANDBOXES: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
 const APPROVALS: AskForApproval[] = ['untrusted', 'on-request', 'never'];
-
-/** Codex's own defaults (config.toml on the host): used when a session doesn't pick a model. */
-function CodexDefaultsCard({ onAdminLost }: { onAdminLost: () => void }) {
-  const { t } = useI18n();
-  const current = useAdminData<CodexDefaults>('/api/admin/codex-defaults', onAdminLost);
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [form, setForm] = useState<CodexDefaults | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  useEffect(() => {
-    get<{ models: ModelInfo[] }>('/api/codex/models')
-      .then((r) => setModels(r.models))
-      .catch(() => setModels([]));
-  }, []);
-  useEffect(() => {
-    if (current.data && !form) setForm(current.data);
-  }, [current.data, form]);
-  const model = models.find((m) => m.id === form?.model) ?? models.find((m) => m.isDefault);
-  return (
-    <section className="card">
-      <h2 className="section-title">
-        <Icon name="sliders" /> {t('settings.codexDefaults')}
-      </h2>
-      <p className="muted" style={{ marginTop: 0 }}>
-        {t('settings.codexDefaultsHint')}
-      </p>
-      <ErrorAlert error={current.error} />
-      {!form ? (
-        current.error ? null : <Spinner />
-      ) : (
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setError(null);
-            try {
-              setForm(await put<CodexDefaults>('/api/admin/codex-defaults', form));
-              setSaved(true);
-              setTimeout(() => setSaved(false), 2000);
-            } catch (err) {
-              setError(err);
-            }
-          }}
-        >
-          <div className="field">
-            <label htmlFor="cd-model">{t('session.model')}</label>
-            <select id="cd-model" value={form.model ?? ''} onChange={(e) => setForm({ ...form, model: e.target.value || null, effort: null })}>
-              <option value="">{t('settings.codexChooses')}</option>
-              {form.model && !models.some((m) => m.id === form.model) ? <option value={form.model}>{form.model}</option> : null}
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.displayName}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="cd-effort">{t('session.effort')}</label>
-            <select id="cd-effort" value={form.effort ?? ''} onChange={(e) => setForm({ ...form, effort: e.target.value || null })}>
-              <option value="">{t('settings.codexChooses')}</option>
-              {(model?.efforts ?? []).map((x) => (
-                <option key={x} value={x}>
-                  {x}
-                </option>
-              ))}
-            </select>
-          </div>
-          <ErrorAlert error={error} />
-          <div className="row">
-            <button type="submit" className="btn primary">
-              {t('common.save')}
-            </button>
-            {saved ? (
-              <span className="muted" role="status">
-                <Icon name="check" size={14} /> {t('common.saved')}
-              </span>
-            ) : null}
-          </div>
-        </form>
-      )}
-    </section>
-  );
-}
 
 export function SettingsTab({ onAdminLost, onAuth }: { onAdminLost: () => void; onAuth: (s: AuthState) => void }) {
   const { t } = useI18n();
@@ -128,7 +46,9 @@ export function SettingsTab({ onAdminLost, onAuth }: { onAdminLost: () => void; 
         ) : (
           <form onSubmit={save}>
             <div className="field">
-              <label htmlFor="set-retention">{t('settings.retention')}</label>
+              <label htmlFor="set-retention">
+                {t('settings.retention')} <InfoTip text={t('settings.retentionHint')} />
+              </label>
               <input
                 id="set-retention"
                 type="number"
@@ -137,10 +57,11 @@ export function SettingsTab({ onAdminLost, onAuth }: { onAdminLost: () => void; 
                 value={form.logRetentionDays}
                 onChange={(e) => setForm({ ...form, logRetentionDays: Number(e.target.value) })}
               />
-              <span className="hint">{t('settings.retentionHint')}</span>
             </div>
             <div className="field">
-              <label htmlFor="set-approval">{t('settings.approvalTimeout')}</label>
+              <label htmlFor="set-approval">
+                {t('settings.approvalTimeout')} <InfoTip text={t('settings.approvalTimeoutHint')} />
+              </label>
               <input
                 id="set-approval"
                 type="number"
@@ -149,14 +70,10 @@ export function SettingsTab({ onAdminLost, onAuth }: { onAdminLost: () => void; 
                 value={form.approvalTimeoutSec}
                 onChange={(e) => setForm({ ...form, approvalTimeoutSec: Number(e.target.value) })}
               />
-              <span className="hint">{t('settings.approvalTimeoutHint')}</span>
             </div>
             <h3 className="section-title" style={{ marginTop: 16 }}>
-              {t('settings.sessionDefaults')}
+              {t('settings.sessionDefaults')} <InfoTip text={t('settings.sessionDefaultsHint')} />
             </h3>
-            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-              {t('settings.sessionDefaultsHint')}
-            </p>
             <div className="field">
               <label htmlFor="set-sandbox">{t('settings.sandbox')}</label>
               <select id="set-sandbox" value={form.defaultSandbox} onChange={(e) => setForm({ ...form, defaultSandbox: e.target.value as SandboxMode })}>
@@ -196,12 +113,8 @@ export function SettingsTab({ onAdminLost, onAuth }: { onAdminLost: () => void; 
           </form>
         )}
         <h2 className="section-title" style={{ marginTop: 20 }}>
-          <Icon name="shield" /> {t('settings.security')}
+          <Icon name="shield" /> {t('settings.security')} <InfoTip text={`${t('settings.securityHint')} ${t('settings.cliHint')}`} />
         </h2>
-        <p className="muted" style={{ marginTop: 0 }}>
-          {t('settings.securityHint')}
-        </p>
-        <p className="muted">{t('settings.cliHint')}</p>
         <button
           type="button"
           className="btn"
@@ -241,7 +154,6 @@ export function SettingsTab({ onAdminLost, onAuth }: { onAdminLost: () => void; 
           </>
         )}
       </section>
-      <CodexDefaultsCard onAdminLost={onAdminLost} />
     </div>
   );
 }

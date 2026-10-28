@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
-import type { ActiveTurnSnapshot, ApprovalInfo, LiveItem, PendingQuestion, ServerEvent, SessionInfo, ThreadGoal, TranscriptEntry, TurnKind } from '../../../../shared/api.js';
+import type { ActiveTurnSnapshot, ApprovalInfo, AutoReview, LiveItem, PendingQuestion, QueuedPrompt, ServerEvent, SessionInfo, ThreadGoal, TranscriptEntry, TurnKind } from '../../../../shared/api.js';
 import type { ThreadItem, TokenUsageBreakdown, TurnPlanStep } from '../../../../shared/codex.js';
 import { authEvents, get, qs } from '../../api';
 
@@ -26,6 +26,9 @@ interface State {
   live: LiveTurn | null;
   approvals: ApprovalInfo[];
   questions: PendingQuestion[];
+  /** Automatic reviews of the running turn's approval requests. */
+  reviews: AutoReview[];
+  queue: { queue: QueuedPrompt[]; paused: boolean };
   /** Latest goal from the stream; undefined until Codex reports one. */
   goal: ThreadGoal | null | undefined;
   connected: boolean;
@@ -41,7 +44,19 @@ type Action =
   | { type: 'optimistic'; requestId: string; turnId: string | null; prompt: string; kind: TurnKind }
   | { type: 'steer'; text: string };
 
-const initial: State = { entries: [], hasMore: false, loaded: false, error: null, live: null, approvals: [], questions: [], goal: undefined, connected: false };
+const initial: State = {
+  entries: [],
+  hasMore: false,
+  loaded: false,
+  error: null,
+  live: null,
+  approvals: [],
+  questions: [],
+  reviews: [],
+  queue: { queue: [], paused: false },
+  goal: undefined,
+  connected: false,
+};
 
 function fromSnapshot(s: ActiveTurnSnapshot): LiveTurn {
   return {
@@ -71,19 +86,26 @@ function upsertItem(items: LiveItem[], next: LiveItem): LiveItem[] {
   return copy;
 }
 
-function applyDelta(item: ThreadItem & Record<string, any>, field: 'text' | 'summary' | 'output', delta: string, index = 0): ThreadItem {
+function applyDelta(item: ThreadItem & Record<string, any>, field: 'text' | 'summary' | 'output' | 'content', delta: string, index = 0): ThreadItem {
   if (field === 'text') return { ...item, text: (item.text ?? '') + delta };
   if (field === 'output') return { ...item, aggregatedOutput: (item.aggregatedOutput ?? '') + delta };
-  const summary: string[] = Array.isArray(item.summary) ? item.summary.slice() : [];
-  while (summary.length <= index) summary.push('');
-  summary[index] += delta;
-  return { ...item, summary };
+  const key = field === 'content' ? 'content' : 'summary';
+  const parts: string[] = Array.isArray(item[key]) ? item[key].slice() : [];
+  while (parts.length <= index) parts.push('');
+  parts[index] += delta;
+  return { ...item, [key]: parts };
 }
 
 function applyEvent(state: State, ev: ServerEvent): State {
   switch (ev.type) {
     case 'snapshot':
-      return { ...state, live: ev.turn ? fromSnapshot(ev.turn) : null, approvals: ev.turn?.approvals ?? [], questions: ev.turn?.questions ?? [] };
+      return {
+        ...state,
+        live: ev.turn ? fromSnapshot(ev.turn) : null,
+        approvals: ev.turn?.approvals ?? [],
+        questions: ev.turn?.questions ?? [],
+        reviews: ev.turn?.reviews ?? [],
+      };
     case 'turn_started': {
       const live =
         state.live && state.live.requestId === ev.requestId
@@ -130,6 +152,12 @@ function applyEvent(state: State, ev: ServerEvent): State {
       return { ...state, questions: state.questions.filter((q) => q.id !== ev.questionId) };
     case 'goal_updated':
       return { ...state, goal: ev.goal };
+    case 'queue_updated':
+      return { ...state, queue: { queue: ev.queue, paused: ev.paused } };
+    case 'auto_review': {
+      const rest = state.reviews.filter((r) => r.reviewId !== ev.review.reviewId);
+      return { ...state, reviews: [...rest, ev.review] };
+    }
     default:
       return state;
   }
@@ -141,7 +169,15 @@ function reducer(state: State, action: Action): State {
       return initial;
     case 'history': {
       const clear = action.clearLive !== undefined && state.live && (state.live.requestId === action.clearLive || state.live.requestId === '');
-      return { ...state, entries: action.entries, hasMore: action.hasMore, loaded: true, error: null, live: clear ? null : state.live };
+      return {
+        ...state,
+        entries: action.entries,
+        hasMore: action.hasMore,
+        loaded: true,
+        error: null,
+        live: clear ? null : state.live,
+        reviews: clear ? [] : state.reviews,
+      };
     }
     case 'older':
       return { ...state, entries: [...action.entries, ...state.entries], hasMore: action.hasMore };
@@ -163,7 +199,7 @@ const PAGE = 300;
 const EVENT_TYPES: Array<ServerEvent['type']> = [
   'snapshot', 'turn_started', 'item_started', 'item_delta', 'item_progress', 'item_completed', 'plan', 'diff', 'usage', 'status',
   'approval_requested', 'approval_resolved', 'question_requested', 'question_resolved', 'goal_updated', 'transcript_changed',
-  'turn_completed', 'session_updated',
+  'queue_updated', 'auto_review', 'turn_completed', 'session_updated',
 ];
 
 /** History from the API plus the live SSE stream for one session. */

@@ -15,6 +15,10 @@
 //   steady     -> streams for ~2 s, reporting token usage as it goes
 //   slow       -> streams for ~20 s (use it to test Stop)
 //   fail       -> the turn fails; "fail limit" fails with usageLimitExceeded
+//   network    -> asks to run a command that needs a host, proposing a network rule
+//   background -> leaves a background terminal running (see /ps)
+//   deny       -> with the automatic reviewer, the review denies the command
+// Plan mode (collaborationMode "plan") answers with a plan instead of doing the work.
 //
 // Env: FAKE_CODEX_SIGNED_IN=0 (signed out), FAKE_CODEX_SEED=1 (one terminal thread),
 //      FAKE_CODEX_DELAY_MS (delay between streamed chunks, default 15).
@@ -26,6 +30,26 @@ import zlib from 'node:zlib';
 
 const DELAY = Number(process.env.FAKE_CODEX_DELAY_MS ?? 15);
 const signedIn = process.env.FAKE_CODEX_SIGNED_IN !== '0';
+
+// `codex doctor`
+if (process.argv.includes('doctor')) {
+  process.stdout.write(`Codex doctor 0.164.0 (fake)\n\u001b[32m✓\u001b[0m installation\n✓ config.toml\n${signedIn ? '✓ auth: ChatGPT' : '✗ auth: not signed in'}\n✓ sandbox\n`);
+  process.exit(0);
+}
+
+let account = signedIn ? { type: 'chatgpt', email: 'owner@example.com', planType: 'plus' } : null;
+const terminals = new Map();
+const features = [
+  { name: 'unified_exec', displayName: 'Background terminals', description: 'Keep long-running commands going in the background', stage: 'stable', enabled: true, defaultEnabled: true, announcement: null },
+  { name: 'memories', displayName: 'Memories', description: 'Remember useful facts across sessions', stage: 'beta', enabled: false, defaultEnabled: false, announcement: null },
+  { name: 'web_search_request', displayName: 'Web search', description: 'Let the model search the web', stage: 'stable', enabled: true, defaultEnabled: true, announcement: null },
+];
+const plugins = [
+  { id: 'github@openai-curated', name: 'github', installed: false, enabled: false, interface: { displayName: 'GitHub', shortDescription: 'Repositories, issues and pull requests' } },
+  { id: 'linear@openai-curated', name: 'linear', installed: true, enabled: true, interface: { displayName: 'Linear', shortDescription: 'Track and update issues' } },
+];
+const skills = [{ name: 'imagegen', description: 'Generate images', path: '/fake/skills/imagegen/SKILL.md', scope: 'system', enabled: true, pluginId: null }];
+let memoryThreads = 7;
 const threads = new Map();
 const loaded = new Set();
 const pendingServerRequests = new Map();
@@ -164,7 +188,7 @@ async function autoTurn(thread) {
   h.finish('completed');
 }
 function wireTurn(turn) {
-  const { input: _i, approvalPolicy: _a, ...rest } = turn;
+  const { input: _i, approvalPolicy: _a, approvalsReviewer: _r, mode: _m, ...rest } = turn;
   return rest;
 }
 
@@ -177,6 +201,18 @@ async function runTurn(thread, turnHandle, text) {
 
   const user = { type: 'userMessage', id: uuid(), clientId: null, content: turn.input };
   itemStart(user); itemDone(user);
+
+  if (turn.mode === 'plan') {
+    const planText = '1. Read the code\n2. Make the change\n3. Run the tests';
+    const plan = { type: 'plan', id: uuid(), text: '' };
+    itemStart(plan);
+    if (!(await streamText(threadId, turnId, plan.id, 'item/plan/delta', planText, {}, ctl))) return finish('interrupted');
+    itemDone({ ...plan, text: planText });
+    addUsage(thread, turnId, step(300, 0, 120, 0));
+    const reply = { type: 'agentMessage', id: uuid(), text: 'Here is my plan. Switch Plan mode off to let me carry it out.', phase: null, memoryCitation: null, delivery: null, questions: null };
+    itemStart({ ...reply, text: '' }); itemDone(reply);
+    return finish('completed');
+  }
 
   const reasoning = { type: 'reasoning', id: uuid(), summary: [], content: [] };
   itemStart(reasoning);
@@ -235,13 +271,32 @@ async function runTurn(thread, turnHandle, text) {
     const cmd = { type: 'commandExecution', id: uuid(), pluginId: null, scriptPath: null, command: 'ls -la', cwd, processId: null, source: 'agent', status: 'inProgress', commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
     itemStart(cmd);
     let allowed = true;
-    if (turn.approvalPolicy !== 'never') {
+    if (turn.approvalPolicy !== 'never' && turn.approvalsReviewer === 'auto_review') {
+      const reviewId = uuid();
+      const action = { type: 'command', command: 'ls -la', cwd, source: 'agent' };
+      notify('item/autoApprovalReview/started', { threadId, turnId, reviewId, targetItemId: cmd.id, startedAtMs: Date.now(), action, review: { status: 'inProgress', riskLevel: null, rationale: null, userAuthorization: null } });
+      await sleep(DELAY);
+      const denied = lower.includes('deny');
+      notify('item/autoApprovalReview/completed', {
+        threadId, turnId, reviewId, targetItemId: cmd.id, startedAtMs: Date.now(), completedAtMs: Date.now(), decisionSource: 'agent', action,
+        review: { status: denied ? 'denied' : 'approved', riskLevel: denied ? 'high' : 'low', rationale: denied ? 'The command could expose private files.' : 'Listing files is harmless.', userAuthorization: null },
+      });
+      allowed = !denied;
+      notes.push(`auto review: ${denied ? 'denied' : 'approved'}`);
+    } else if (turn.approvalPolicy !== 'never') {
+      const network = lower.includes('network');
       const answer = await serverRequest('item/commandExecution/requestApproval', {
         kind: 'command', threadId, turnId, itemId: cmd.id, startedAtMs: Date.now(), approvalId: null, environmentId: null,
-        reason: 'List the files to see what is there', command: 'ls -la', cwd, commandActions: [],
+        reason: network ? 'Needs to reach example.com' : 'List the files to see what is there', command: 'ls -la', cwd, commandActions: [],
+        proposedExecpolicyAmendment: ['ls'],
+        ...(network ? { networkApprovalContext: { host: 'example.com', protocol: 'https' }, proposedNetworkPolicyAmendments: [{ action: 'allow', host: 'example.com' }] } : {}),
       });
       if (ctl.interrupted) return finish('interrupted');
-      allowed = answer?.decision === 'accept' || answer?.decision === 'acceptForSession';
+      const d = answer?.decision;
+      // "cancel" declines and ends the turn.
+      if (d === 'cancel') return finish('interrupted');
+      allowed = d === 'accept' || d === 'acceptForSession' || (typeof d === 'object' && d !== null);
+      notes.push(`approval: ${typeof d === 'object' && d !== null ? Object.keys(d)[0] : d}`);
     }
     if (allowed) {
       const output = fs.readdirSync(cwd).map((f) => `-rw-r--r-- 1 owner owner 0 ${f}`).join('\n') + '\n';
@@ -250,6 +305,13 @@ async function runTurn(thread, turnHandle, text) {
     } else {
       itemDone({ ...cmd, status: 'declined' });
     }
+  }
+
+  if (lower.includes('background')) {
+    const list = terminals.get(threadId) ?? [];
+    list.push({ processId: uuid(), itemId: uuid(), command: 'npm run dev', cwd, osPid: 4242 + list.length, cpuPercent: 1.5, rssKb: 51200 });
+    terminals.set(threadId, list);
+    notes.push('started a background terminal');
   }
 
   if (lower.includes('image')) {
@@ -338,15 +400,29 @@ function searchFiles(root, query, out, rel = '', depth = 0) {
 
 const handlers = {
   initialize: () => ({ userAgent: `codex_console/0.164.0 (fake; ${process.platform}) fake`, codexHome: '/tmp/fake-codex-home', platformFamily: 'unix', platformOs: process.platform }),
-  'account/read': () => (signedIn ? { account: { type: 'chatgpt', email: 'owner@example.com', planType: 'plus' }, requiresOpenaiAuth: true } : { account: null, requiresOpenaiAuth: true }),
+  'account/read': () => ({ account, requiresOpenaiAuth: true }),
   'account/rateLimits/read': () => {
-    if (!signedIn) throw rpcError(-32600, 'codex account authentication required to read rate limits');
+    if (!account) throw rpcError(-32600, 'codex account authentication required to read rate limits');
     return { ordinaryUsageAllowed: true, rateLimits: rateLimits(), rateLimitsByLimitId: null, rateLimitResetCredits: null, accountId: null, rateLimitUpsell: null };
   },
   'model/list': () => ({
     data: [
-      { id: 'gpt-fake-1', model: 'gpt-fake-1', displayName: 'GPT Fake 1', description: 'Default test model', hidden: false, isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'medium', description: '' }, { reasoningEffort: 'high', description: '' }] },
-      { id: 'gpt-fake-mini', model: 'gpt-fake-mini', displayName: 'GPT Fake Mini', description: 'Fast test model', hidden: false, isDefault: false, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }] },
+      {
+        id: 'gpt-fake-1', model: 'gpt-fake-1', displayName: 'GPT Fake 1', description: 'Default test model', hidden: false, isDefault: true, defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low', description: 'Quick answers' },
+          { reasoningEffort: 'medium', description: 'Balanced speed and depth' },
+          { reasoningEffort: 'high', description: 'Thinks longer on hard problems' },
+          { reasoningEffort: 'xhigh', description: 'Most thorough' },
+        ],
+        serviceTiers: [{ id: 'priority', name: 'Fast', description: 'Faster responses; uses more of your plan' }], defaultServiceTier: null, inputModalities: ['text', 'image'],
+      },
+      {
+        id: 'gpt-fake-mini', model: 'gpt-fake-mini', displayName: 'GPT Fake Mini', description: 'Fast test model', hidden: false, isDefault: false, defaultReasoningEffort: 'low',
+        supportedReasoningEfforts: [{ reasoningEffort: 'low', description: 'Quick answers' }, { reasoningEffort: 'medium', description: 'Balanced' }],
+        serviceTiers: [], defaultServiceTier: null, inputModalities: ['text'],
+      },
+      { id: 'gpt-fake-hidden', model: 'gpt-fake-hidden', displayName: 'Hidden', description: '', hidden: true, isDefault: false, defaultReasoningEffort: 'low', supportedReasoningEfforts: [] },
     ],
     nextCursor: null,
   }),
@@ -396,6 +472,9 @@ const handlers = {
     if (!t.preview) t.preview = text.slice(0, 100);
     const handle = beginTurnDeferred(t, p.input ?? []);
     handle.turn.approvalPolicy = p.approvalPolicy;
+    handle.turn.approvalsReviewer = p.approvalsReviewer ?? 'user';
+    if (p.collaborationMode) t.mode = p.collaborationMode.mode;
+    handle.turn.mode = t.mode ?? 'default';
     setTimeout(() => {
       handle.start();
       void runTurn(t, handle, text);
@@ -467,16 +546,15 @@ const handlers = {
   // Only `git diff` is simulated, and only under a read-only sandbox (as the console must use it).
   'command/exec': (p) => {
     const cmd = p.command ?? [];
-    if (cmd[0] !== 'git' || !cmd.includes('diff')) return { exitCode: 127, stdout: '', stderr: `fake: ${cmd[0]}: command not available\n` };
+    const isGitDiff = (cmd[0] === 'git' && cmd.includes('diff')) || (cmd[0] === 'sh' && /git[\s\S]*diff/.test(cmd[2] ?? ''));
+    if (!isGitDiff) return { exitCode: 127, stdout: '', stderr: `fake: ${cmd[0]}: command not available\n` };
     if (p.sandboxPolicy?.type !== 'readOnly') throw rpcError(-32600, 'fake: git diff must run in a read-only sandbox');
     if (!fs.existsSync(path.join(p.cwd, '.git'))) {
       return { exitCode: 129, stdout: '', stderr: 'warning: Not a git repository. Use --no-index to compare two paths outside a working tree\nusage: git diff --no-index [<options>] <path> <path>\n' };
     }
     return { exitCode: 0, stdout: 'diff --git a/notes.md b/notes.md\n+fake change\n', stderr: '' };
   },
-  'skills/list': (p) => ({
-    data: [{ cwd: p?.cwds?.[0] ?? '', skills: [{ name: 'imagegen', description: 'Generate images', path: '/fake/skills/imagegen/SKILL.md', scope: 'system', enabled: true, pluginId: null }], errors: [] }],
-  }),
+  'skills/list': (p) => ({ data: [{ cwd: p?.cwds?.[0] ?? '', skills, errors: [] }] }),
   fuzzyFileSearch: (p) => {
     const out = [];
     for (const root of p.roots ?? []) if (fs.existsSync(root)) searchFiles(root, p.query ?? '', out);
@@ -497,7 +575,124 @@ const handlers = {
     notify('thread/goal/cleared', { threadId: t.id });
     return {};
   },
-  'config/read': () => ({ config: JSON.parse(JSON.stringify(config)), origins: {}, layers: null }),
+  'config/read': (p) => ({
+    config: JSON.parse(JSON.stringify(config)),
+    origins: Object.fromEntries(Object.keys(config).map((k) => [k, { name: { type: 'user', file: '/tmp/fake-codex-home/config.toml', profile: null }, version: `v${configVersion}` }])),
+    layers: p?.includeLayers
+      ? [
+          { name: { type: 'user', file: '/tmp/fake-codex-home/config.toml', profile: null }, version: `v${configVersion}`, config: JSON.parse(JSON.stringify(config)), disabledReason: null },
+          { name: { type: 'system', file: '/etc/codex/config.toml' }, version: 'v0', config: {}, disabledReason: null },
+        ]
+      : null,
+  }),
+  'config/batchWrite': (p) => {
+    for (const e of p.edits ?? []) setPath(config, e.keyPath, e.value);
+    return { status: 'ok', version: `v${++configVersion}`, filePath: '/tmp/fake-codex-home/config.toml', overriddenMetadata: null };
+  },
+  'collaborationMode/list': () => ({ data: [{ name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'medium' }, { name: 'Default', mode: 'default', model: null, reasoning_effort: null }] }),
+  'experimentalFeature/list': () => ({ data: features, nextCursor: null }),
+  'experimentalFeature/enablement/set': (p) => {
+    for (const [name, on] of Object.entries(p.enablement ?? {})) {
+      const f = features.find((x) => x.name === name);
+      if (!f) throw rpcError(-32600, `unknown feature ${name}`);
+      f.enabled = on;
+    }
+    return {};
+  },
+  'hooks/list': (p) => ({ data: (p?.cwds ?? []).map((cwd) => ({ cwd, hooks: [{ handlerType: 'command', event: 'preToolUse', command: './scripts/check.sh', async: false }], warnings: [], errors: [] })) }),
+  'plugin/list': () => ({ marketplaces: [{ name: 'openai-curated', path: null, interface: { displayName: 'OpenAI' }, plugins }], featuredPluginIds: ['github@openai-curated'], marketplaceLoadErrors: [] }),
+  'plugin/install': (p) => {
+    const pl = plugins.find((x) => x.name === p.pluginName);
+    if (!pl) throw rpcError(-32600, `unknown plugin ${p.pluginName}`);
+    pl.installed = true;
+    pl.enabled = true;
+    return { appsNeedingAuth: [], authPolicy: 'none' };
+  },
+  'plugin/uninstall': (p) => {
+    const pl = plugins.find((x) => x.id === p.pluginId);
+    if (!pl) throw rpcError(-32600, `unknown plugin ${p.pluginId}`);
+    pl.installed = false;
+    pl.enabled = false;
+    return {};
+  },
+  'app/list': () => ({ data: [{ id: 'gmail', name: 'Gmail', description: 'Read and draft mail', isAccessible: true, isEnabled: false, installUrl: null, logoUrl: null, pluginDisplayNames: [] }], nextCursor: null }),
+  'skills/config/write': (p) => {
+    const sk = skills.find((x) => x.path === p.path);
+    if (!sk) throw rpcError(-32600, 'unknown skill');
+    sk.enabled = p.enabled;
+    return {};
+  },
+  'memory/status': () => ({ v2ConsolidatedThreads: memoryThreads, v2Ready: true }),
+  'memory/reset': () => {
+    memoryThreads = 0;
+    return {};
+  },
+  'externalAgentConfig/detect': () => ({ items: [{ itemType: 'instructions', description: 'CLAUDE.md → AGENTS.md', cwd: null, details: null }], connectors: [] }),
+  'externalAgentConfig/import': (p) => {
+    setTimeout(() => notify('externalAgentConfig/import/completed', { imported: (p.migrationItems ?? []).length }), 10);
+    return { importId: uuid() };
+  },
+  'feedback/upload': (p) => ({ threadId: p?.threadId ?? null }),
+  'account/login/start': (p) => {
+    const loginId = uuid();
+    const done = () => {
+      account = { type: 'chatgpt', email: 'owner@example.com', planType: 'plus' };
+      notify('account/login/completed', { loginId, success: true, error: null });
+      notify('account/updated', { authMode: 'chatgpt', planType: 'plus' });
+    };
+    if (p?.type === 'chatgptDeviceCode') {
+      setTimeout(done, 200);
+      return { type: 'chatgptDeviceCode', loginId, verificationUrl: 'https://auth.example.com/device', userCode: 'FAKE-1234' };
+    }
+    if (p?.type === 'chatgpt') return { type: 'chatgpt', loginId, authUrl: 'https://auth.example.com/authorize?client=fake' };
+    throw rpcError(-32600, `login type ${p?.type} not supported`);
+  },
+  'account/login/cancel': () => ({}),
+  'account/logout': () => {
+    account = null;
+    notify('account/updated', { authMode: null, planType: null });
+    return {};
+  },
+  'account/usage/read': () => ({
+    dailyUsageBuckets: [0, 1, 2, 3, 4, 5, 6].map((d) => ({ startDate: new Date(Date.now() - d * 86_400_000).toISOString().slice(0, 10), tokens: 20_000 + d * 7_500 })),
+    summary: { lifetimeTokens: 4_200_000, peakDailyTokens: 180_000, currentStreakDays: 3, longestStreakDays: 12, longestRunningTurnSec: 640 },
+    threadUsage: [],
+  }),
+  'account/rateLimitResetCredit/consume': () => {
+    usedPercent = 0;
+    return { outcome: 'reset' };
+  },
+  'mcpServer/resource/read': (p) => {
+    if (!config.mcp_servers[p.server]) throw rpcError(-32600, `unknown MCP server ${p.server}`);
+    return { contents: [{ uri: p.uri, mimeType: 'text/plain', text: `Contents of ${p.uri}` }], originCallId: null };
+  },
+  'thread/delete': (p) => {
+    threads.delete(p.threadId);
+    loaded.delete(p.threadId);
+    return {};
+  },
+  'thread/unarchive': () => ({}),
+  'thread/unsubscribe': (p) => {
+    loaded.delete(p.threadId);
+    return { status: 'unsubscribed' };
+  },
+  'thread/memoryMode/set': (p) => {
+    getThread(p.threadId).memoryMode = p.mode;
+    return {};
+  },
+  'thread/approveGuardianDeniedAction': (p) => {
+    if (!p?.event?.id) throw rpcError(-32600, 'missing event');
+    return {};
+  },
+  'thread/backgroundTerminals/list': (p) => ({ data: terminals.get(p.threadId) ?? [], nextCursor: null }),
+  'thread/backgroundTerminals/terminate': (p) => {
+    terminals.set(p.threadId, (terminals.get(p.threadId) ?? []).filter((x) => x.processId !== p.processId));
+    return {};
+  },
+  'thread/backgroundTerminals/clean': (p) => {
+    terminals.delete(p.threadId);
+    return {};
+  },
   'config/value/write': (p) => {
     setPath(config, p.keyPath, p.value);
     return { status: 'ok', version: `v${++configVersion}`, filePath: '/tmp/fake-codex-home/config.toml', overriddenMetadata: null };
@@ -514,7 +709,7 @@ const handlers = {
       toolListMeta: null,
       tools: c.enabled === false ? {} : { echo: { name: 'echo', description: 'Echo text back', inputSchema: { type: 'object' } } },
       toolsError: null,
-      resources: [],
+      resources: c.enabled === false ? [] : [{ uri: 'docs://readme', name: 'README', mimeType: 'text/plain' }],
       resourceTemplates: [],
       authStatus: c.url ? (oauthDone.has(name) ? 'oAuth' : 'notLoggedIn') : 'unsupported',
     })),
@@ -535,18 +730,21 @@ const handlers = {
 function beginTurnDeferred(thread, input) {
   let h = null;
   const turn = { id: uuid(), rootTurnId: null, items: [], itemsView: 'notLoaded', status: 'inProgress', error: null, startedAt: null, completedAt: null, durationMs: null, input };
+  // Registered at once, like Codex: an interrupt right after turn/start must still land.
+  const ctl = { interrupted: false, steers: [], startedMs: Date.now() };
+  activeTurns.set(turn.id, ctl);
   const handle = {
     turn,
-    get ctl() { return h.ctl; },
+    get ctl() { return ctl; },
     start() {
-      h = beginTurnWith(thread, turn);
+      h = beginTurnWith(thread, turn, ctl);
       Object.assign(handle, { itemStart: h.itemStart, itemDone: h.itemDone, finish: h.finish });
     },
   };
   return handle;
 }
-function beginTurnWith(thread, turn) {
-  const ctl = { interrupted: false, steers: [], startedMs: Date.now() };
+function beginTurnWith(thread, turn, existing = null) {
+  const ctl = existing ?? { interrupted: false, steers: [], startedMs: Date.now() };
   activeTurns.set(turn.id, ctl);
   turn.startedAt = nowSec();
   notify('turn/started', { threadId: thread.id, turn: { ...wireTurn(turn) } });

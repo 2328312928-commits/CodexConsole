@@ -123,6 +123,7 @@ export function registerApiKeyRoutes(app: FastifyInstance, deps: AppDeps): void 
     if (!keys.get(id)) throw new ApiError(404, 'api_key_not_found');
     keys.revoke(id);
     turns.interruptForKey(id);
+    deps.queue.clearKey(id);
     audit.security('api_key_revoked', { ...eventCtx(req), apiKeyId: id });
     return { key: info(id) };
   });

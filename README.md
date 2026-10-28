@@ -12,7 +12,7 @@ A private, single-owner web console for **your own** [Codex CLI](https://github.
 - create **API keys** for your own scripts and devices, with quotas, expiry, scopes, rotation and revocation, and use them over the internet through a separate public API
 - use a private **admin dashboard**: every request with time, session, device or key, prompt size, duration, status, tokens and files, plus your plan's usage limits, per-key usage, device tokens, logins, file transfers and a security log
 
-Every screen is available in **English and 简体中文** (toggle in the top bar). Chinese docs: [README.zh-CN.md](README.zh-CN.md).
+Every screen is available in **English and 简体中文** (toggle in the top bar), in light and dark. Chinese docs: [README.zh-CN.md](README.zh-CN.md). What Codex offers and where each part lives: [docs/FEATURES.md](docs/FEATURES.md).
 
 > **It is a remote shell.** Codex runs commands on the machine hosting the console. Anyone who gets into the console can do what Codex can do. Read [SECURITY.md](SECURITY.md) before exposing it beyond `localhost`.
 
@@ -127,9 +127,10 @@ Type `/` in the prompt box for the command menu, or use the **⋯** menu in a se
 | `/review`, `/compact`, `/diff`, `/status`, `/goal` | Code review, compact the context, show changes, session status, thread goal |
 | `/fork`, `/undo`, `/new` | Fork the session, rewind the last turn, new session. Each turn also has **Fork from here** and **Rewind** |
 | `/init`, `/skills`, `/mention`, `/mcp`, `/help` | Write `AGENTS.md`, use a skill, mention a file, list MCP servers, list commands |
+| `/plan`, `/permissions`, `/ps`, `/stop`, `/cd`, `/copy`, `/export`, `/feedback` | Plan mode, permission presets, background terminals, working folder, copy the last answer, export as Markdown, feedback to OpenAI |
 | `!command` | Run a shell command in the session folder (always recorded in the security log) |
 
-While Codex is working, the prompt box **steers** the running turn. Approvals and questions waiting in other sessions show up at the top of the session list.
+The chip next to the prompt box picks the **model, reasoning level, speed and how much thinking is shown**, from the options Codex offers for that model; the choice stays with the session. While Codex is working, the prompt box **queues** your next message or **steers** the running turn. Approvals and questions waiting in other sessions show up at the top of the session list.
 
 New console defaults for sandbox, approvals and network are in **Admin → Settings**, together with Codex's own default model and reasoning (written to its `config.toml`).
 

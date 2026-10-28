@@ -24,6 +24,27 @@ export interface SessionRow {
   forked_from: string | null;
   api_key_id: string | null;
   api_key_label: string | null;
+  /** JSON: the SessionSettings fields without their own column. */
+  extra_settings: string | null;
+}
+
+type ExtraSettings = Pick<SessionSettings, 'summary' | 'serviceTier' | 'mode' | 'approvalsReviewer' | 'webSearch' | 'writableRoots' | 'memory'>;
+
+function extrasOf(s: Partial<SessionSettings>): string | null {
+  const e: Partial<ExtraSettings> = {};
+  for (const k of ['summary', 'serviceTier', 'mode', 'approvalsReviewer', 'webSearch', 'writableRoots', 'memory'] as const) {
+    if (s[k] !== undefined && s[k] !== null) (e as Record<string, unknown>)[k] = s[k];
+  }
+  return Object.keys(e).length ? JSON.stringify(e) : null;
+}
+
+function parseExtras(raw: string | null): Partial<ExtraSettings> {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Partial<ExtraSettings>;
+  } catch {
+    return {};
+  }
 }
 
 interface TranscriptRow {
@@ -70,8 +91,8 @@ export class SessionStore {
     const st = opts.settings ?? {};
     this.db.run(
       `INSERT INTO sessions (id, thread_id, title, title_auto, cwd, model, effort, sandbox, approval_policy, network,
-         created_at, updated_at, created_by_device, api_key_id, imported, forked_from)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         created_at, updated_at, created_by_device, api_key_id, imported, forked_from, extra_settings)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       opts.threadId ?? null,
       opts.title.slice(0, MAX_TITLE_LENGTH),
@@ -88,6 +109,7 @@ export class SessionStore {
       opts.apiKeyId ?? null,
       opts.imported ?? false,
       opts.forkedFrom ?? null,
+      extrasOf(st),
     );
     return this.get(id)!;
   }
@@ -136,23 +158,37 @@ export class SessionStore {
 
   setSettings(id: string, s: SessionSettings): void {
     this.db.run(
-      'UPDATE sessions SET model = ?, effort = ?, sandbox = ?, approval_policy = ?, network = ? WHERE id = ?',
+      'UPDATE sessions SET model = ?, effort = ?, sandbox = ?, approval_policy = ?, network = ?, extra_settings = ? WHERE id = ?',
       s.model,
       s.effort,
       s.sandbox,
       s.approvalPolicy,
       s.networkAccess === null ? null : s.networkAccess,
+      extrasOf(s),
       id,
     );
   }
 
+  /** Move the session to another folder (Codex's `/cd`). */
+  setCwd(id: string, cwd: string): void {
+    this.db.run('UPDATE sessions SET cwd = ? WHERE id = ?', cwd, id);
+  }
+
   settingsOf(row: SessionRow): SessionSettings {
+    const e = parseExtras(row.extra_settings);
     return {
       model: row.model,
       effort: row.effort,
+      summary: e.summary ?? null,
+      serviceTier: e.serviceTier ?? null,
+      mode: e.mode ?? null,
       sandbox: row.sandbox as SandboxMode | null,
       approvalPolicy: row.approval_policy as AskForApproval | null,
+      approvalsReviewer: e.approvalsReviewer ?? null,
       networkAccess: row.network === null ? null : row.network === 1,
+      webSearch: e.webSearch ?? null,
+      writableRoots: Array.isArray(e.writableRoots) ? e.writableRoots : null,
+      memory: typeof e.memory === 'boolean' ? e.memory : null,
     };
   }
 

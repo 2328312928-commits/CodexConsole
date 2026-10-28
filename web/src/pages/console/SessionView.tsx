@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { CommandResult, FileEntry, ModelInfo, SessionInfo, SessionSettings, ThreadGoal, TurnKind } from '../../../../shared/api.js';
-import { get, patch, post } from '../../api';
+import type { CommandResult, EffectiveSettings, FileEntry, ModelInfo, SavedPrompt, SessionInfo, SessionSettings, ThreadGoal, TurnKind } from '../../../../shared/api.js';
+import { del, get, patch, post } from '../../api';
+import { navigate } from '../../router';
 import { useCodexStatus } from '../../codexStatus';
 import { Menu, type MenuItem } from '../../components/Menu';
 import { ConfirmDialog, ErrorAlert, Spinner } from '../../components/ui';
@@ -9,7 +10,8 @@ import { Icon } from '../../icons';
 import { Composer, type Attachment, type PromptExtras, type ToolDialog } from './Composer';
 import { DeleteSessionDialog, RenameDialog } from './dialogs';
 import { FilesPanel } from './FilesPanel';
-import { CommandResultDialog, DiffDialog, GoalDialog, ReviewDialog, SettingsDialog, StatusDialog } from './SessionTools';
+import { downloadText, transcriptMarkdown } from './exportMarkdown';
+import { CommandResultDialog, DiffDialog, FeedbackDialog, FolderDialog, GoalDialog, ReviewDialog, SettingsDialog, StatusDialog, TerminalsDialog, type ClientCommand } from './SessionTools';
 import { History, LiveTurnView, PendingQuestions, type ViewContext } from './Transcript';
 import { useSessionStream } from './useSessionStream';
 
@@ -23,6 +25,7 @@ export function SessionView({
   onSessionCreated,
   onDeleted,
   onOpenSidebar,
+  onImport,
 }: {
   session: SessionInfo;
   workspaceRoot: string | null;
@@ -31,13 +34,16 @@ export function SessionView({
   onSessionCreated: (s: SessionInfo) => void;
   onDeleted: () => void;
   onOpenSidebar: () => void;
+  onImport: () => void;
 }) {
   const { t } = useI18n();
   const { status } = useCodexStatus();
   const stream = useSessionStream(session.id, onSessionUpdated);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [filesOpen, setFilesOpen] = useState(() => window.innerWidth > 1100 && session.workspacePath !== null);
-  const [dialog, setDialog] = useState<ToolDialog | 'rename' | 'delete' | null>(null);
+  const [dialog, setDialog] = useState<ToolDialog | 'rename' | 'delete' | 'terminals' | 'feedback' | 'folder' | null>(null);
+  const [effective, setEffective] = useState<EffectiveSettings | null>(null);
+  const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
   const [rewinding, setRewinding] = useState<string | null>(null);
   const [commandResult, setCommandResult] = useState<CommandResult | null>(null);
   const [goal, setGoal] = useState<ThreadGoal | null>(null);
@@ -53,6 +59,18 @@ export function SessionView({
     setActionError(null);
     atBottom.current = true;
   }, [session.id]);
+
+  const settingsKey = JSON.stringify(session.settings);
+  useEffect(() => {
+    get<{ effective: EffectiveSettings }>(`/api/sessions/${session.id}`)
+      .then((r) => setEffective(r.effective))
+      .catch(() => undefined);
+  }, [session.id, settingsKey]);
+  useEffect(() => {
+    get<{ prompts: SavedPrompt[] }>('/api/codex/prompts')
+      .then((r) => setPrompts(r.prompts))
+      .catch(() => setPrompts([]));
+  }, []);
 
   const loadGoal = useCallback(() => {
     if (!session.threadId) return;
@@ -117,6 +135,56 @@ export function SessionView({
     setAttachments([]);
   };
 
+  const queuePrompt = async (text: string, extras: PromptExtras) => {
+    await post(`/api/sessions/${session.id}/queue`, { text, attachments: attachments.map((a) => a.path), ...extras });
+    setAttachments([]);
+  };
+
+  const lastAnswer = () => {
+    const live = stream.live?.items.filter((l) => l.item.type === 'agentMessage' && l.done).pop()?.item as { text?: string } | undefined;
+    if (live?.text) return live.text;
+    const e = [...stream.entries].reverse().find((x) => x.kind === 'agentMessage');
+    return (e?.data?.item?.text as string | undefined) ?? '';
+  };
+
+  /** Commands handled here, without a server round trip. */
+  const clientCommand = (cmd: ClientCommand) => {
+    setNotice(null);
+    switch (cmd) {
+      case '/copy': {
+        const text = lastAnswer();
+        if (!text) return setNotice(t('copy.nothing'));
+        void navigator.clipboard?.writeText(text).then(() => setNotice(t('copy.done')));
+        return;
+      }
+      case '/export':
+        downloadText(`${(session.title || 'codex-session').replace(/[^\p{L}\p{N}._-]+/gu, '-').slice(0, 60)}.md`, transcriptMarkdown(session, stream.entries, { you: t('turn.you'), codex: t('turn.codex') }));
+        return;
+      case '/feedback':
+        return setDialog('feedback');
+      case '/ps':
+        return setDialog('terminals');
+      case '/cd':
+        return setDialog('folder');
+      case '/rename':
+        return setDialog('rename');
+      case '/delete':
+        return setDialog('delete');
+      case '/permissions':
+        return setDialog('settings');
+      case '/resume':
+        return onImport();
+      case '/usage':
+        return navigate('/admin/codex');
+      case '/experimental':
+      case '/hooks':
+      case '/plugins':
+      case '/apps':
+      case '/memories':
+        return navigate(`/admin/codex#${cmd.slice(1)}`);
+    }
+  };
+
   const steer = async (text: string) => {
     await post(`/api/sessions/${session.id}/steer`, { text });
     atBottom.current = true;
@@ -168,6 +236,10 @@ export function SessionView({
     { label: t('session.diff'), icon: 'edit', onSelect: () => setDialog('diff') },
     { label: t('session.status'), icon: 'info', onSelect: () => setDialog('status') },
     { label: t('session.goal'), icon: 'target', onSelect: () => setDialog('goal'), disabled: !hasThread },
+    { label: t('session.terminals'), icon: 'terminal', onSelect: () => setDialog('terminals'), disabled: !hasThread },
+    { label: t('session.folder'), icon: 'folder', onSelect: () => setDialog('folder'), disabled: running },
+    { label: t('session.export'), icon: 'download', onSelect: () => clientCommand('/export') },
+    { label: t('session.feedback'), icon: 'message', onSelect: () => setDialog('feedback') },
     { label: t('session.fork'), icon: 'fork', onSelect: () => fork(null), disabled: running || !hasThread },
     { label: t('session.rewindLast'), icon: 'undo', onSelect: () => setRewinding(''), disabled: running || !hasThread },
     ...(hasThread
@@ -199,8 +271,6 @@ export function SessionView({
   ];
 
   const isEmpty = stream.loaded && stream.entries.length === 0 && !stream.live;
-  const s = session.settings;
-  const overrides = [s.sandbox ? t(`sandbox.${s.sandbox}`) : null, s.approvalPolicy ? t(`approvalPolicy.${s.approvalPolicy}`) : null].filter(Boolean).join(' · ');
 
   return (
     <>
@@ -228,7 +298,6 @@ export function SessionView({
           ) : null}
           <button type="button" className="btn ghost small" onClick={() => setDialog('settings')} title={t('session.settings')} aria-label={t('session.settings')}>
             <Icon name="sliders" size={16} />
-            {overrides ? <span className="hide-mobile settings-summary">{overrides}</span> : null}
           </button>
           <Menu label={t('session.actions')} items={menu} />
           <button
@@ -291,7 +360,7 @@ export function SessionView({
             <ErrorAlert error={stream.error} />
             <History entries={stream.entries} ctx={ctx} />
             {stream.live ? (
-              <LiveTurnView live={stream.live} approvals={stream.approvals} questions={stream.questions} ctx={ctx} />
+              <LiveTurnView live={stream.live} approvals={stream.approvals} questions={stream.questions} reviews={stream.reviews} ctx={ctx} />
             ) : (
               <PendingQuestions questions={stream.questions} />
             )}
@@ -303,11 +372,15 @@ export function SessionView({
         <Composer
           session={session}
           models={models}
+          effective={effective}
           running={running}
           disabledReason={disabledReason}
           attachments={attachments}
           setAttachments={setAttachments}
+          queue={stream.queue}
+          savedPrompts={prompts}
           onSend={send}
+          onQueue={queuePrompt}
           onCommand={command}
           onSteer={steer}
           onStop={async () => {
@@ -315,6 +388,13 @@ export function SessionView({
           }}
           onSettings={updateSettings}
           onTool={setDialog}
+          onClientCommand={clientCommand}
+          onRemoveQueued={async (id) => {
+            await del(`/api/sessions/${session.id}/queue/${id}`);
+          }}
+          onResumeQueue={async () => {
+            await post(`/api/sessions/${session.id}/queue/resume`);
+          }}
         />
       </div>
       {filesOpen && session.workspacePath !== null ? (
@@ -345,6 +425,9 @@ export function SessionView({
         />
       ) : null}
       {commandResult ? <CommandResultDialog result={commandResult} onClose={() => setCommandResult(null)} /> : null}
+      {dialog === 'terminals' ? <TerminalsDialog sessionId={session.id} onClose={() => setDialog(null)} /> : null}
+      {dialog === 'feedback' ? <FeedbackDialog url={`/api/sessions/${session.id}/feedback`} onClose={() => setDialog(null)} /> : null}
+      {dialog === 'folder' ? <FolderDialog session={session} onClose={() => setDialog(null)} onSaved={onSessionUpdated} /> : null}
       {rewinding !== null ? (
         <ConfirmDialog
           title={t('rewind.title')}

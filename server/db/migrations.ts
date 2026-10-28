@@ -206,4 +206,8 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE file_transfers ADD COLUMN api_key_id TEXT;
   ALTER TABLE security_events ADD COLUMN api_key_id TEXT;
   `,
+  // v3: more per-session Codex settings (reasoning summary, speed, plan mode, reviewer, web search, extra folders, memory).
+  `
+  ALTER TABLE sessions ADD COLUMN extra_settings TEXT;
+  `,
 ];

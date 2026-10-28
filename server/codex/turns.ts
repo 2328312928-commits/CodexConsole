@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import type {
+  AutoReview,
   ActiveTurnSnapshot,
   ApprovalDecision,
   ApprovalInfo,
@@ -101,6 +102,8 @@ interface ActiveTurn {
   expiryTimer: NodeJS.Timeout | null;
   /** Item completions still capturing media; the turn waits for them before closing. */
   pendingItems: Set<Promise<void>>;
+  /** Codex's automatic reviews of this turn's approval requests. */
+  reviews: Map<string, AutoReview>;
 }
 
 interface PendingApproval {
@@ -155,7 +158,29 @@ function isUsageLimit(info: unknown): boolean {
 export function sandboxPolicyFor(s: EffectiveSettings): SandboxPolicy {
   if (s.sandbox === 'danger-full-access') return { type: 'dangerFullAccess' };
   if (s.sandbox === 'read-only') return { type: 'readOnly', networkAccess: s.networkAccess };
-  return { type: 'workspaceWrite', writableRoots: [], networkAccess: s.networkAccess, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+  return { type: 'workspaceWrite', writableRoots: s.writableRoots, networkAccess: s.networkAccess, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+}
+
+/** One line describing what an automatic review looked at. */
+function describeReviewAction(a: any): string {
+  if (!a || typeof a !== 'object') return '';
+  const text = a.command ?? (Array.isArray(a.argv) ? a.argv.join(' ') : null) ?? a.host ?? a.path ?? a.type ?? '';
+  return String(text).slice(0, 500);
+}
+
+/** Codex's core form of a review event, rebuilt from the notification for thread/approveGuardianDeniedAction. */
+function guardianEvent(p: any): unknown {
+  return {
+    id: p.reviewId,
+    turn_id: p.turnId,
+    target_item_id: p.targetItemId ?? null,
+    status: p.review?.status,
+    risk_level: p.review?.riskLevel ?? null,
+    user_authorization: p.review?.userAuthorization ?? null,
+    rationale: p.review?.rationale ?? null,
+    decision_source: p.decisionSource ?? null,
+    action: p.action,
+  };
 }
 
 export function toGoal(g: any): ThreadGoal | null {
@@ -176,6 +201,10 @@ export class TurnManager extends EventEmitter<TurnEvents> {
   private readonly threadModels = new Map<string, string>();
   /** Latest cumulative token totals and context window per thread. */
   readonly threadTotals = new Map<string, TokenUsageBreakdown>();
+  /** Last collaboration mode sent per thread (Plan mode sticks until switched back). */
+  private readonly threadModes = new Map<string, 'default' | 'plan'>();
+  /** Denied automatic reviews that can still be approved once, by review id. */
+  private readonly deniedReviews = new Map<string, { sessionId: string; threadId: string; event: unknown }>();
   readonly contextWindows = new Map<string, number>();
 
   constructor(
@@ -233,8 +262,38 @@ export class TurnManager extends EventEmitter<TurnEvents> {
     this.emit('event', sessionId, event);
   }
 
+  /** Publish an event for a session from outside (e.g. the prompt queue). */
+  emitTo(sessionId: string, event: ServerEvent): void {
+    this.emitEvent(sessionId, event);
+  }
+
   private threadConfig(s: EffectiveSettings): Record<string, unknown> {
-    return { sandbox_workspace_write: { network_access: s.networkAccess } };
+    return { sandbox_workspace_write: { network_access: s.networkAccess }, ...(s.webSearch ? { web_search: s.webSearch } : {}) };
+  }
+
+  /** Collaboration mode only needs sending to enter Plan mode, or to leave it again. */
+  private collaborationMode(threadId: string, s: EffectiveSettings): Record<string, unknown> | undefined {
+    const previous = this.threadModes.get(threadId) ?? 'default';
+    if (!s.model || (s.mode === 'default' && previous === 'default')) return undefined;
+    this.threadModes.set(threadId, s.mode);
+    return { mode: s.mode, settings: { model: s.model, reasoning_effort: s.effort ?? null, developer_instructions: null } };
+  }
+
+  /** Per-turn overrides shared by prompts and the operations that start turns. */
+  private turnOverrides(session: SessionRow, threadId: string, s: EffectiveSettings): Record<string, unknown> {
+    const mode = this.collaborationMode(threadId, s);
+    return {
+      cwd: session.cwd,
+      model: s.model ?? null,
+      effort: s.effort ?? null,
+      summary: s.summary ?? null,
+      // Per turn only; "default" is standard speed.
+      serviceTierForTurn: s.serviceTier ?? 'default',
+      approvalPolicy: s.approvalPolicy,
+      approvalsReviewer: s.approvalsReviewer,
+      sandboxPolicy: sandboxPolicyFor(s),
+      ...(mode ? { collaborationMode: mode } : {}),
+    };
   }
 
   /** Make sure the session has a loaded Codex thread (starting or resuming one). */
@@ -252,6 +311,9 @@ export class TurnManager extends EventEmitter<TurnEvents> {
       threadId = res.thread.id;
       if (res.model) this.threadModels.set(threadId, res.model);
       this.threadTotals.set(threadId, ZERO_USAGE);
+      if (s.memory !== null) {
+        await bridge.request('thread/memoryMode/set', { threadId, mode: s.memory ? 'enabled' : 'disabled' }).catch(() => undefined);
+      }
       sessions.setThread(session.id, threadId);
       session.thread_id = threadId;
       bridge.markThreadLoaded(threadId);
@@ -307,6 +369,7 @@ export class TurnManager extends EventEmitter<TurnEvents> {
       startTimer: null,
       expiryTimer: null,
       pendingItems: new Set(),
+      reviews: new Map(),
     };
   }
 
@@ -325,6 +388,8 @@ export class TurnManager extends EventEmitter<TurnEvents> {
     extraInput?: UserInput[];
     settings: EffectiveSettings;
     apiKey?: KeyContext | null;
+    /** JSON Schema for the final answer (`codex exec --output-schema`). */
+    outputSchema?: unknown;
   }): Promise<{ requestId: string; turnId: string | null }> {
     const { bridge, requests, sessions } = this.deps;
     const { session, settings } = opts;
@@ -384,10 +449,8 @@ export class TurnManager extends EventEmitter<TurnEvents> {
       const res = await bridge.request<{ turn: Turn }>('turn/start', {
         threadId,
         input,
-        model: settings.model ?? null,
-        effort: settings.effort ?? null,
-        approvalPolicy: settings.approvalPolicy,
-        sandboxPolicy: sandboxPolicyFor(settings),
+        ...this.turnOverrides(session, threadId, settings),
+        ...(opts.outputSchema !== undefined ? { outputSchema: opts.outputSchema } : {}),
       });
       if (!turn.turnId) this.setTurnId(turn, res.turn.id);
       requests.setTurn(requestId, threadId, turn.turnId);
@@ -548,12 +611,13 @@ export class TurnManager extends EventEmitter<TurnEvents> {
       }
       case 'item/agentMessage/delta':
       case 'item/reasoning/summaryTextDelta':
+      case 'item/reasoning/textDelta':
       case 'item/commandExecution/outputDelta': {
         const t = this.turnFor(p?.threadId, p?.turnId);
         if (!t || typeof p?.delta !== 'string') return;
         const live = t.items.get(p.itemId);
         if (!live) return;
-        let field: 'text' | 'summary' | 'output';
+        let field: 'text' | 'summary' | 'output' | 'content';
         if (method === 'item/commandExecution/outputDelta') {
           field = 'output';
           if (live.outputBytes >= MAX_LIVE_OUTPUT) return;
@@ -563,6 +627,13 @@ export class TurnManager extends EventEmitter<TurnEvents> {
           if (method === 'item/agentMessage/delta') {
             field = 'text';
             live.item.text = (live.item.text ?? '') + p.delta;
+          } else if (method === 'item/reasoning/textDelta') {
+            field = 'content';
+            const idx = Number(p.contentIndex ?? 0);
+            const content: string[] = Array.isArray(live.item.content) ? [...live.item.content] : [];
+            while (content.length <= idx) content.push('');
+            content[idx] += p.delta;
+            live.item.content = content;
           } else {
             field = 'summary';
             const idx = Number(p.summaryIndex ?? 0);
@@ -578,7 +649,7 @@ export class TurnManager extends EventEmitter<TurnEvents> {
           turnId: t.turnId!,
           itemId: p.itemId,
           field,
-          ...(field === 'summary' ? { index: Number(p.summaryIndex ?? 0) } : {}),
+          ...(field === 'summary' ? { index: Number(p.summaryIndex ?? 0) } : field === 'content' ? { index: Number(p.contentIndex ?? 0) } : {}),
           delta: p.delta,
         });
         return;
@@ -648,6 +719,28 @@ export class TurnManager extends EventEmitter<TurnEvents> {
         const t = this.turnFor(p?.threadId, p?.turn?.id);
         if (!t) return;
         void this.finish(t, p.turn as Turn);
+        return;
+      }
+      case 'item/autoApprovalReview/started':
+      case 'item/autoApprovalReview/completed': {
+        const t = this.turnFor(p?.threadId, p?.turnId);
+        const session = t?.session ?? this.sessionForThread(p?.threadId);
+        if (!session || typeof p?.reviewId !== 'string') return;
+        const done = method === 'item/autoApprovalReview/completed';
+        const review: AutoReview = {
+          reviewId: p.reviewId,
+          turnId: typeof p.turnId === 'string' ? p.turnId : null,
+          status: (p.review?.status as AutoReview['status']) ?? (done ? 'approved' : 'inProgress'),
+          riskLevel: typeof p.review?.riskLevel === 'string' ? p.review.riskLevel : null,
+          rationale: typeof p.review?.rationale === 'string' ? p.review.rationale.slice(0, 4000) : null,
+          action: describeReviewAction(p.action),
+        };
+        t?.reviews.set(review.reviewId, review);
+        if (done) {
+          this.deps.sessions.addTranscript(session.id, { requestId: t?.requestId ?? null, turnId: review.turnId, itemId: null, kind: 'autoReview', data: review });
+          if (review.status === 'denied') this.deniedReviews.set(review.reviewId, { sessionId: session.id, threadId: p.threadId, event: guardianEvent(p) });
+        }
+        this.emitEvent(session.id, { type: 'auto_review', review });
         return;
       }
       case 'thread/name/updated': {
@@ -858,9 +951,16 @@ export class TurnManager extends EventEmitter<TurnEvents> {
     const settings: EffectiveSettings = ctx?.settings ?? {
       model: session.model,
       effort: session.effort,
+      summary: null,
+      serviceTier: null,
+      mode: 'default',
       sandbox: 'workspace-write',
       approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
       networkAccess: false,
+      webSearch: null,
+      writableRoots: [],
+      memory: null,
     };
     const apiKey = ctx?.apiKey ?? null;
     const requestId = this.deps.requests.start({
@@ -933,6 +1033,10 @@ export class TurnManager extends EventEmitter<TurnEvents> {
         grantRoot: typeof p.grantRoot === 'string' ? p.grantRoot : null,
         permissions: p.permissions ?? null,
         changes: fileItem?.type === 'fileChange' && Array.isArray(fileItem.changes) ? forStorage(fileItem).changes : null,
+        proposedRule: Array.isArray(p.proposedExecpolicyAmendment) && p.proposedExecpolicyAmendment.length ? p.proposedExecpolicyAmendment.map(String) : null,
+        networkRules: Array.isArray(p.proposedNetworkPolicyAmendments) && p.proposedNetworkPolicyAmendments.length
+          ? p.proposedNetworkPolicyAmendments.map((r: { action?: unknown; host?: unknown }) => ({ action: String(r?.action ?? 'allow'), host: String(r?.host ?? '') }))
+          : null,
         createdAt: now,
         expiresAt: now + policy.approvalTimeoutMs,
       };
@@ -1007,11 +1111,24 @@ export class TurnManager extends EventEmitter<TurnEvents> {
     return this.questions.get(questionId)?.info.sessionId ?? null;
   }
 
-  decide(approvalId: string, decision: ApprovalDecision, ctx: EventContext): ApprovalInfo {
+  decide(approvalId: string, decision: ApprovalDecision, ctx: EventContext, ruleIndex = 0): ApprovalInfo {
     const a = this.approvals.get(approvalId);
     if (!a) throw new ApiError(404, 'approval_not_found');
-    this.respondApproval(approvalId, decision, decision, ctx);
+    if (decision === 'acceptAlways' && a.info.kind === 'command' && !a.info.proposedRule) throw new ApiError(400, 'bad_request', 'Codex proposed no rule for this command');
+    if (decision === 'applyNetworkRule' && !a.info.networkRules?.[ruleIndex]) throw new ApiError(400, 'bad_request', 'no such network rule');
+    this.respondApproval(approvalId, decision, decision, ctx, ruleIndex);
     return a.info;
+  }
+
+  /** Allow, once, an action Codex's automatic reviewer denied (Codex's `/approve`). */
+  async approveDenied(sessionId: string, reviewId: string, ctx: EventContext): Promise<void> {
+    const d = this.deniedReviews.get(reviewId);
+    if (!d || d.sessionId !== sessionId) throw new ApiError(404, 'approval_not_found');
+    await this.deps.bridge.request('thread/approveGuardianDeniedAction', { threadId: d.threadId, event: d.event }).catch((err) => {
+      throw new ApiError(502, 'codex_error', (err as Error).message);
+    });
+    this.deniedReviews.delete(reviewId);
+    this.deps.audit.security('approval_decided', ctx, { kind: 'autoReview', decision: 'accept', review: reviewId, session: sessionId });
   }
 
   answer(questionId: string, answer: QuestionAnswer, ctx: EventContext): PendingQuestion {
@@ -1071,22 +1188,32 @@ export class TurnManager extends EventEmitter<TurnEvents> {
     this.emitEvent(q.info.sessionId, { type: 'question_resolved', questionId, outcome });
   }
 
-  private respondApproval(approvalId: string, decision: ApprovalDecision, outcome: ApprovalDecision | 'timeout' | 'cancelled', ctx: EventContext): void {
+  private respondApproval(approvalId: string, decision: ApprovalDecision, outcome: ApprovalDecision | 'timeout' | 'cancelled', ctx: EventContext, ruleIndex = 0): void {
     const a = this.approvals.get(approvalId);
     if (!a) return;
     let result: unknown;
+    const allow = decision !== 'decline' && decision !== 'cancel';
     if (a.method === 'item/permissions/requestApproval') {
       const requested = (a.params?.permissions ?? {}) as Record<string, unknown>;
       const granted: Record<string, unknown> = {};
-      if (decision !== 'decline') {
+      if (allow) {
         if (requested.network) granted.network = requested.network;
         if (requested.fileSystem) granted.fileSystem = requested.fileSystem;
       }
-      result = { permissions: granted, scope: decision === 'acceptForSession' ? 'session' : 'turn' };
+      result = { permissions: granted, scope: decision === 'acceptForSession' || decision === 'acceptAlways' ? 'session' : 'turn' };
+    } else if (a.method === 'item/commandExecution/requestApproval' && decision === 'acceptAlways' && a.info.proposedRule) {
+      result = { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: a.info.proposedRule } } };
+    } else if (a.method === 'item/commandExecution/requestApproval' && decision === 'applyNetworkRule' && a.info.networkRules?.[ruleIndex]) {
+      result = { decision: { applyNetworkPolicyAmendment: { network_policy_amendment: a.info.networkRules[ruleIndex] } } };
     } else {
-      result = { decision };
+      result = { decision: decision === 'acceptAlways' ? 'acceptForSession' : decision === 'applyNetworkRule' ? 'accept' : decision };
     }
     this.deps.bridge.respond(a.rpcId, result);
+    // Permission requests have no "cancel" answer: decline, then stop the turn.
+    if (decision === 'cancel' && a.method === 'item/permissions/requestApproval') {
+      const t = this.bySession.get(a.info.sessionId);
+      if (t) void this.stopTurn(t).catch(() => undefined);
+    }
     if (outcome !== 'cancelled') {
       const t = this.bySession.get(a.info.sessionId);
       this.deps.sessions.addTranscript(a.info.sessionId, {
@@ -1135,6 +1262,7 @@ export class TurnManager extends EventEmitter<TurnEvents> {
       diff: t.diff,
       approvals: this.pendingApprovals(sessionId),
       questions: this.pendingQuestions(sessionId),
+      reviews: [...t.reviews.values()],
       statusMessage: t.statusMessage,
       usage: t.usage,
     };

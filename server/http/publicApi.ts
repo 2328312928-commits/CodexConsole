@@ -3,7 +3,7 @@ import type net from 'node:net';
 import path from 'node:path';
 import Fastify, { LogController, type FastifyInstance, type FastifyReply, type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import { z } from 'zod';
-import type { ApiKeyScope, MediaRef, ServerEvent, TurnResult } from '../../shared/api.js';
+import { SAFE_APPROVAL_DECISIONS, type ApiKeyScope, type MediaRef, type ServerEvent, type TurnResult } from '../../shared/api.js';
 import type { ApiKey, ApiKeyAuth } from '../auth/apiKeys.js';
 import { runCommand } from '../codex/commands.js';
 import type { KeyCaps } from '../codex/sessionOps.js';
@@ -18,7 +18,7 @@ import { handleError } from './errorHandler.js';
 import { contentDisposition, FILE_CSP } from './headers.js';
 import { mcpActions, mcpInputSchema, mcpNameParam } from './routes/mcp.js';
 import { parseRange } from './routes/files.js';
-import { answerBody, buildPromptInput, defaultFolderName, makeSessionFolder, reviewBody, settingsBody } from './routes/sessions.js';
+import { answerBody, buildPromptInput, decisionBody, defaultFolderName, makeSessionFolder, reviewBody, settingsBody, turnSettingsBody } from './routes/sessions.js';
 
 type Scope = ApiKeyScope | 'public' | 'key';
 
@@ -42,7 +42,7 @@ const idParam = z.object({ id: z.string().regex(/^ses_[A-Za-z0-9_-]{1,40}$/) });
  * with API keys. No cookies, no web UI, no admin routes exist here.
  */
 export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServerOptions['logger'] } = {}) {
-  const { config, keys, limiter, audit, sessions, turns, ops, workspace, requests, media, db, mcp } = deps;
+  const { config, keys, limiter, audit, sessions, turns, ops, workspace, requests, media, db, mcp, queue } = deps;
   const queries = new AdminQueries(db);
   const api = config.api;
   const sockets = new Set<net.Socket>();
@@ -318,7 +318,10 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
   app.patch('/v1/sessions/:id/settings', { config: { scope: 'settings' } }, async (req) => {
     const s = ownSession(req, idParam.parse(req.params).id);
     const k = key(req);
-    const row = ops.updateSettings(s, settingsBody.parse(req.body), caps(k));
+    const body = settingsBody.parse(req.body);
+    // Keys work only in their own folder: no extra writable folders.
+    if (body.writableRoots?.length) throw new ApiError(403, 'setting_not_allowed', 'extra writable folders are not available to API keys');
+    const row = ops.updateSettings(s, body, caps(k));
     return { session: ops.info(row), effective: ops.effective(row, caps(k)) };
   });
 
@@ -332,8 +335,9 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
         mentions: z.array(z.string().max(4096)).max(20).default([]),
         skills: z.array(z.string().max(200)).max(10).default([]),
         imageUrls: z.array(z.string().max(4096)).max(10).default([]),
-        model: z.string().max(100).nullable().optional(),
-        effort: z.string().max(40).nullable().optional(),
+        ...turnSettingsBody,
+        /** JSON Schema for the final answer, like `codex exec --output-schema`. */
+        outputSchema: z.record(z.string(), z.unknown()).optional(),
         wait: z.boolean().default(false),
         timeoutSec: z.number().int().min(1).max(api.maxWaitSec).optional(),
       })
@@ -365,12 +369,23 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
     const kws = await keyWorkspace(k);
     const { attachments, extra } = await buildPromptInput(kws, { attachments: body.files, mentions: body.mentions, imageUrls: body.imageUrls });
     extra.push(...(await ops.skillInputs(s.cwd, body.skills)));
+    await ops.warm();
     let session = s;
-    if (body.model !== undefined || body.effort !== undefined) {
+    const { model, effort, summary, serviceTier, mode } = body;
+    if ([model, effort, summary, serviceTier, mode].some((v) => v !== undefined)) {
       need(req, 'settings');
-      session = ops.updateSettings(s, { model: body.model, effort: body.effort }, caps(k));
+      session = ops.updateSettings(s, { model, effort, summary, serviceTier, mode }, caps(k));
     }
-    const started = await turns.startTurn({ session, ctx: evCtx(req), text: body.text, attachments, extraInput: extra, settings: ops.effective(session, caps(k)), apiKey: keyCtx(k) });
+    const started = await turns.startTurn({
+      session,
+      ctx: evCtx(req),
+      text: body.text,
+      attachments,
+      extraInput: extra,
+      settings: ops.effective(session, caps(k)),
+      apiKey: keyCtx(k),
+      outputSchema: body.outputSchema,
+    });
     if (!body.wait) return reply.status(202).send({ ...started, status: 'running' });
     const done = await turns.waitForRequest(started.requestId, (body.timeoutSec ?? Math.min(120, api.maxWaitSec)) * 1000);
     return reply.status(done ? 200 : 202).send(turnResult(req, sessions.get(s.id)!, started.requestId));
@@ -388,6 +403,51 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
     const s = ownSession(req, idParam.parse(req.params).id);
     const { text } = z.object({ text: z.string().min(1).max(config.limits.maxPromptChars) }).strict().parse(req.body);
     return turns.steer(s.id, text, evCtx(req));
+  });
+
+  // Prompts sent while Codex is busy run in order afterwards.
+  app.get('/v1/sessions/:id/queue', { config: { scope: 'prompt' } }, async (req) => queue.list(ownSession(req, idParam.parse(req.params).id).id));
+  app.post('/v1/sessions/:id/queue', { config: { scope: 'prompt' } }, async (req) => {
+    const s = ownSession(req, idParam.parse(req.params).id);
+    const k = key(req);
+    const body = z
+      .object({
+        text: z.string().max(config.limits.maxPromptChars * 4),
+        files: z.array(z.string().max(4096)).max(20).default([]),
+        mentions: z.array(z.string().max(4096)).max(20).default([]),
+        skills: z.array(z.string().max(200)).max(10).default([]),
+        imageUrls: z.array(z.string().max(4096)).max(10).default([]),
+      })
+      .strict()
+      .parse(req.body);
+    if (!body.text.trim() && body.files.length + body.mentions.length + body.skills.length + body.imageUrls.length === 0) throw new ApiError(400, 'prompt_empty');
+    if ([...body.text].length > config.limits.maxPromptChars) throw new ApiError(413, 'prompt_too_long');
+    if (body.imageUrls.length > 0 && !k.allowNetwork) throw new ApiError(403, 'setting_not_allowed', 'image links need network access, which this key does not allow');
+    const { attachments, extra } = await buildPromptInput(await keyWorkspace(k), { attachments: body.files, mentions: body.mentions, imageUrls: body.imageUrls });
+    extra.push(...(await ops.skillInputs(s.cwd, body.skills)));
+    return { queued: queue.add(s.id, { text: body.text, attachments, extraInput: extra, keyId: k.id, ctx: evCtx(req) }) };
+  });
+  app.delete('/v1/sessions/:id/queue/:itemId', { config: { scope: 'prompt' } }, async (req) => {
+    const { id, itemId } = z.object({ id: idParam.shape.id, itemId: z.string().max(100) }).parse(req.params);
+    queue.remove(ownSession(req, id).id, itemId);
+    return { ok: true };
+  });
+  app.post('/v1/sessions/:id/queue/resume', { config: { scope: 'prompt' } }, async (req) => {
+    queue.resume(ownSession(req, idParam.parse(req.params).id).id);
+    return { ok: true };
+  });
+
+  app.get('/v1/sessions/:id/terminals', { config: { scope: 'prompt' } }, async (req) => ({ terminals: await ops.terminals(ownSession(req, idParam.parse(req.params).id)) }));
+  app.post('/v1/sessions/:id/terminals/stop', { config: { scope: 'sessions' } }, async (req) => {
+    const s = ownSession(req, idParam.parse(req.params).id);
+    const { processId } = z.object({ processId: z.string().max(200).nullable() }).strict().parse(req.body);
+    await ops.stopTerminal(s, processId);
+    return { ok: true };
+  });
+  app.post('/v1/sessions/:id/folder', { config: { scope: 'sessions' } }, async (req) => {
+    const s = ownSession(req, idParam.parse(req.params).id);
+    const { path: rel } = z.object({ path: z.string().max(4096) }).strict().parse(req.body);
+    return { session: ops.info(await ops.changeFolder(s, rel, await keyWorkspace(key(req)))) };
   });
 
   app.post('/v1/sessions/:id/interrupt', { config: { scope: 'prompt' } }, async (req) => {
@@ -440,6 +500,9 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
         ctx: evCtx(req),
         key: { caps: caps(k), context: keyCtx(k), hasScope: (sc) => k.scopes.has(sc) },
         newSession: async (title) => ops.info(await newKeySession(req, title)),
+        folderRoot: await keyWorkspace(k),
+        rename: (title) => ops.rename(s, title),
+        archive: (archived) => ops.archive(s, archived),
       },
       command,
     );
@@ -471,14 +534,14 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
     const sid = turns.approvalSession(approvalId);
     if (!sid) throw new ApiError(404, 'approval_not_found');
     ownSession(req, sid);
-    const { decision } = z.object({ decision: z.enum(['accept', 'acceptForSession', 'decline']) }).strict().parse(req.body);
+    const { decision, ruleIndex } = decisionBody.parse(req.body);
     // Allowing an approval can lift Codex past the sandbox (escalated commands, extra write roots,
     // network or file permissions). A key may only do that if its own caps already allow everything.
     const k = key(req);
-    if (decision !== 'decline' && !(k.maxSandbox === 'danger-full-access' && k.allowNetwork)) {
+    if (!SAFE_APPROVAL_DECISIONS.includes(decision) && !(k.maxSandbox === 'danger-full-access' && k.allowNetwork)) {
       throw new ApiError(403, 'setting_not_allowed', 'this key can only decline: allow it in the console, or give the key full access and network');
     }
-    turns.decide(approvalId, decision, evCtx(req));
+    turns.decide(approvalId, decision, evCtx(req), ruleIndex);
     return { ok: true };
   });
   app.post('/v1/questions/:questionId', { config: { scope: 'approvals' } }, async (req) => {
@@ -501,6 +564,8 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
     const send = (ev: ServerEvent) => res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
     res.write('retry: 3000\n\n');
     send({ type: 'snapshot', turn: turns.snapshot(s.id) });
+    const queued = queue.list(s.id);
+    if (queued.queue.length) send({ type: 'queue_updated', ...queued });
     const listener = (sid: string, ev: ServerEvent) => {
       if (sid === s.id) send(ev);
     };

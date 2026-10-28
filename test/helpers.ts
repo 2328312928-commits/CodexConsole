@@ -47,6 +47,7 @@ export async function makeHarness(opts: { signedIn?: boolean; env?: Record<strin
     codexEnv: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
+      CODEX_HOME: path.join(root, 'codex-home'),
       FAKE_CODEX_SIGNED_IN: opts.signedIn === false ? '0' : '1',
       FAKE_CODEX_DELAY_MS: '1',
       ...opts.fakeEnv,

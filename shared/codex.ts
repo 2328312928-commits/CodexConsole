@@ -147,6 +147,9 @@ export interface CodexModel {
   isDefault: boolean;
   defaultReasoningEffort: string;
   supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+  serviceTiers?: Array<{ id: string; name: string; description: string }>;
+  defaultServiceTier?: string | null;
+  inputModalities?: string[];
 }
 
 export interface TurnPlanStep {
@@ -186,6 +189,35 @@ export const USED_CLIENT_REQUESTS = [
   'config/value/write',
   'config/mcpServer/reload',
   'mcpServer/oauth/login',
+  'mcpServer/resource/read',
+  'thread/delete',
+  'thread/unarchive',
+  'thread/unsubscribe',
+  'thread/memoryMode/set',
+  'thread/approveGuardianDeniedAction',
+  'thread/backgroundTerminals/list',
+  'thread/backgroundTerminals/terminate',
+  'thread/backgroundTerminals/clean',
+  'collaborationMode/list',
+  'config/batchWrite',
+  'experimentalFeature/list',
+  'experimentalFeature/enablement/set',
+  'hooks/list',
+  'plugin/list',
+  'plugin/install',
+  'plugin/uninstall',
+  'app/list',
+  'skills/config/write',
+  'memory/status',
+  'memory/reset',
+  'externalAgentConfig/detect',
+  'externalAgentConfig/import',
+  'feedback/upload',
+  'account/login/start',
+  'account/login/cancel',
+  'account/logout',
+  'account/usage/read',
+  'account/rateLimitResetCredit/consume',
 ] as const;
 
 export const USED_SERVER_NOTIFICATIONS = [
@@ -206,6 +238,15 @@ export const USED_SERVER_NOTIFICATIONS = [
   'item/mcpToolCall/progress',
   'thread/goal/updated',
   'thread/goal/cleared',
+  'item/reasoning/textDelta',
+  'item/autoApprovalReview/started',
+  'item/autoApprovalReview/completed',
+  'account/login/completed',
+  'model/rerouted',
+  'warning',
+  'configWarning',
+  'deprecationNotice',
+  'guardianWarning',
   'error',
 ] as const;
 

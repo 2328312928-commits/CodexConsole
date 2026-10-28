@@ -93,6 +93,22 @@ The public API is **off by default** (`CC_API_ENABLED`). When on, it is a **seco
 - **Remote servers** must use `https://` (plain `http://` only for localhost).
 - **OAuth sign-in links** are shown, never opened automatically. The sign-in completes on the host.
 
+## Codex administration
+
+The admin area (fresh TOTP) can now do everything the Codex CLI can do to Codex itself. Each change goes to the security log:
+
+- edit any `config.toml` key (including commands such as MCP servers, hooks and `notify`)
+- toggle feature flags
+- install or remove plugins
+- sign Codex in with a ChatGPT device code, or sign it out
+- reset memories
+- import setup from other agents
+- run `codex doctor`
+
+Treat a stolen admin unlock like shell access. **Feedback to OpenAI** is sent only when you submit the form, and includes logs only if you tick the box.
+
+**Automatic review** (Codex's approvals reviewer) lets a model answer approval requests. It is your choice per session. API keys never use it, so a key's caps always hold.
+
 ## Codex itself
 
 - **Login.** The console starts `codex app-server` as your user. Codex keeps its login in `~/.codex/`; the console never reads, copies or logs it, and never triggers a login or logout.

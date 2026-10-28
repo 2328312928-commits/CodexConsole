@@ -128,7 +128,8 @@ curl -s -OJ "$BASE/files/content?path=plot.png" -H "$AUTH"
 | `GET /sessions/:id` | `prompt` | `{ session, effective, turn }`：生效的设置，以及正在运行的轮次（如有） |
 | `DELETE /sessions/:id` | `sessions` | 从控制台删除（文件保留） |
 | `GET /sessions/:id/history?before=&limit=` | `prompt` | 已保存的记录条目，从旧到新，按条目 ID 分页 |
-| `PATCH /sessions/:id/settings` | `settings` | `model`、`effort`、`sandbox`、`approvalPolicy`、`networkAccess` 任选；`null` 表示使用控制台默认值。超过密钥上限会得到 `403 setting_not_allowed` |
+| `PATCH /sessions/:id/settings` | `settings` | `model`、`effort`、`summary`（`auto`/`concise`/`detailed`/`none`）、`serviceTier`（例如 `priority`）、`mode`（`default`/`plan`）、`sandbox`、`approvalPolicy`、`networkAccess`、`webSearch`（`disabled`/`cached`/`live`）、`memory` 任选；`null` 表示默认值。超过密钥上限会得到 `403 setting_not_allowed`（密钥不能使用自动审查、额外可写文件夹，没有联网权限时也不能使用网页搜索） |
+| `POST /sessions/:id/folder` | `sessions` | `{ "path" }`：把会话移到密钥文件夹内的另一个文件夹（`/cd`） |
 | `GET /sessions/:id/status` | `prompt` | 生效的设置、上下文窗口、令牌总数、目标、用量限制、待处理的审批/问题 |
 | `GET /sessions/:id/diff` | `prompt` | `{ turnDiff, gitDiff, gitError }`：上一轮的改动，以及在 Codex 只读沙箱中运行的 `git diff HEAD` |
 | `GET /sessions/:id/skills` | `prompt` | 会话文件夹中可用的技能 |
@@ -146,13 +147,18 @@ curl -s -OJ "$BASE/files/content?path=plot.png" -H "$AUTH"
   "imageUrls": ["https://example.com/screenshot.png"],
   "model": "gpt-5.5",
   "effort": "high",
+  "summary": "concise",
+  "serviceTier": "priority",
+  "mode": "plan",
+  "outputSchema": { "type": "object", "properties": { "answer": { "type": "string" } }, "required": ["answer"] },
   "wait": true,
   "timeoutSec": 300
 }
 ```
 
 - `files` 作为附件发送（图片会以图片形式发送）。`mentions` 让 Codex 关注某些文件或文件夹。`skills` 是 `/skills` 返回的技能名。`imageUrls` 必须是 `https://`，并且需要密钥允许联网：Codex 会自行下载这些图片。
-- `model` / `effort` 还需要 `settings` 范围，并会保存到会话中。
+- `model`、`effort`、`summary`、`serviceTier` 和 `mode` 还需要 `settings` 范围，并会保存到会话中。`GET /models` 列出每个模型的推理强度和速度档位。
+- `outputSchema` 用 JSON Schema 约束最终回答（同 `codex exec --output-schema`）。
 - 不带 `wait`：立即返回 `202 { requestId, turnId, status: "running" }`。
 - 带 `wait`：完成时返回 `200` 和[轮次结果](#轮次结果)；`timeoutSec`（默认 120，最大 `CC_API_MAX_WAIT_SEC`）到了还没完成则返回 `202` 和目前的部分结果。
 - 每个会话同一时间只能运行一个提示（`409 turn_in_progress`）。
@@ -162,6 +168,10 @@ curl -s -OJ "$BASE/files/content?path=plot.png" -H "$AUTH"
 | `GET /sessions/:id/turns/:requestId?wait=<秒>` | `prompt` | 轮次结果；最多等待 `wait` 秒直到完成 |
 | `POST /sessions/:id/steer` | `prompt` | `{ "text" }`：为正在运行的轮次补充指示 |
 | `POST /sessions/:id/interrupt` | `prompt` | 停止正在运行的轮次 |
+| `GET/POST /sessions/:id/queue` | `prompt` | 列出，或添加一条在当前轮次之后运行的提示（请求体同 `/turns`，但不含选项） |
+| `DELETE /sessions/:id/queue/:itemId`、`POST /sessions/:id/queue/resume` | `prompt` | 移除排队的提示；继续因失败或停止而暂停的队列 |
+| `GET /sessions/:id/terminals` | `prompt` | Codex 启动的后台终端（`/ps`） |
+| `POST /sessions/:id/terminals/stop` | `sessions` | `{ "processId" }`，或 `null` 表示全部（`/stop`） |
 | `POST /sessions/:id/command` | `prompt` | `{ "command": "/compact" }`：见[斜杠命令](#斜杠命令)。每个命令还会检查各自的范围 |
 | `POST /sessions/:id/review` | `sessions` | `{ "target": { "type": "uncommittedChanges" } }`，或 `baseBranch` + `branch`、`commit` + `sha`、`custom` + `instructions` |
 | `POST /sessions/:id/compact` | `sessions` | 总结对话以腾出上下文 |
@@ -181,7 +191,7 @@ curl -s -OJ "$BASE/files/content?path=plot.png" -H "$AUTH"
 | 方法与路径 | 范围 | 请求体 |
 | --- | --- | --- |
 | `GET /approvals` | `approvals` | 该密钥会话中待处理的 `{ approvals, questions }` |
-| `POST /approvals/:id` | `approvals` | `{ "decision": "accept" \| "acceptForSession" \| "decline" }` |
+| `POST /approvals/:id` | `approvals` | `{ "decision": "accept" \| "acceptForSession" \| "acceptAlways" \| "applyNetworkRule" \| "decline" \| "cancel", "ruleIndex"? }`。`acceptAlways` 保存 Codex 建议的规则（`proposedRule`）；`applyNetworkRule` 应用 `networkRules[ruleIndex]`；`cancel` 拒绝并停止本轮 |
 | `POST /questions/:id` | `approvals` | Codex 自己的问题：`{ "kind": "input", "answers": { "<问题ID>": ["答案"] } }`。MCP 表单/链接：`{ "kind": "elicitation", "action": "accept" \| "decline" \| "cancel", "content"?: {…} }` |
 
 未回答的审批会在审批超时后被拒绝（默认 10 分钟）；未回答的问题会被跳过。
@@ -271,6 +281,12 @@ curl -N "$BASE/sessions/$SID/events" -H "$AUTH"
 | `/status` | `prompt` | 会话状态 |
 | `/mcp` | `mcp:read` | MCP 服务器和工具 |
 | `/goal [目的 \| clear]` | `sessions` | 查看、设置或清除目标 |
+| `/plan [on \| off]` | `settings` | 计划模式 |
+| `/permissions read-only\|auto\|full-access` | `settings` | 沙箱和审批预设 |
+| `/rename <标题>`、`/archive`、`/unarchive` | `sessions` | |
+| `/cd <文件夹>`、`/pwd` | `sessions` / `prompt` | 工作文件夹 |
+| `/ps`、`/stop` | `prompt` / `sessions` | 后台终端 |
+| `/summary`、`/clear` | `prompt` | 立即总结；新建会话 |
 | `!<命令>` | `shell` ⚠ | 在会话文件夹中运行 shell 命令 |
 
 返回 `{ "kind": … }`：`turn`（带 `requestId`）、`session`、`settings`、`status`、`diff`、`skills`、`models`、`mcp`、`goal`、`help` 或 `done`。

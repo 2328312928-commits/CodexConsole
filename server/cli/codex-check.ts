@@ -54,7 +54,8 @@ async function main(): Promise<void> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-console-schema-'));
   let problems = 0;
   try {
-    await run(bin, ['app-server', 'generate-json-schema', '--out', tmp], { env });
+    // The console uses the experimental API (Plan mode, background terminals, memories).
+    await run(bin, ['app-server', 'generate-json-schema', '--experimental', '--out', tmp], { env });
     const checks: Array<[string, readonly string[]]> = [
       ['ClientRequest.json', USED_CLIENT_REQUESTS],
       ['ServerNotification.json', USED_SERVER_NOTIFICATIONS],
@@ -85,7 +86,7 @@ async function main(): Promise<void> {
   try {
     await peer.request('initialize', {
       clientInfo: { name: 'codex_console_check', title: 'Codex Console check', version: '1' },
-      capabilities: { experimentalApi: false, requestAttestation: false },
+      capabilities: { experimentalApi: true, requestAttestation: false },
     });
     peer.notify('initialized');
     const acct = await peer.request<{ account: { type: string; planType?: string } | null; requiresOpenaiAuth: boolean }>('account/read', {});

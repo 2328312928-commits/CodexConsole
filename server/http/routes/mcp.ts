@@ -90,6 +90,12 @@ export function registerMcpRoutes(app: FastifyInstance, deps: AppDeps): void {
     return actions.login(name, eventCtx(req));
   });
 
+  app.get('/api/admin/mcp/:name/resource', ADMIN, async (req) => {
+    const { name } = mcpNameParam.parse(req.params);
+    const { uri } = z.object({ uri: z.string().min(1).max(4096) }).parse(req.query);
+    return deps.mcp.readResource(name, uri);
+  });
+
   app.post('/api/admin/mcp/:name/logout', ADMIN, async (req) => {
     const { name } = mcpNameParam.parse(req.params);
     await actions.logout(name);

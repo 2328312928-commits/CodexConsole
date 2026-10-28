@@ -167,7 +167,7 @@ export function RenameDialog({ session, onClose, onDone }: { session: SessionInf
 
 export function DeleteSessionDialog({ session, onClose, onDeleted }: { session: SessionInfo; onClose: () => void; onDeleted: () => void }) {
   const { t } = useI18n();
-  const [archiveThread, setArchiveThread] = useState(false);
+  const [thread, setThread] = useState<'keep' | 'archive' | 'delete'>('keep');
   return (
     <ConfirmDialog
       title={t('session.delete')}
@@ -176,15 +176,18 @@ export function DeleteSessionDialog({ session, onClose, onDeleted }: { session: 
       danger
       onClose={onClose}
       onConfirm={async () => {
-        await del(`/api/sessions/${session.id}${qs({ archiveThread: archiveThread ? 1 : undefined })}`);
+        await del(`/api/sessions/${session.id}${qs({ archiveThread: thread === 'archive' ? 1 : undefined, deleteThread: thread === 'delete' ? 1 : undefined })}`);
         onDeleted();
       }}
     >
       {session.threadId ? (
-        <label className="checkbox">
-          <input type="checkbox" checked={archiveThread} onChange={(e) => setArchiveThread(e.target.checked)} />
-          {t('session.deleteArchiveThread')}
-        </label>
+        <div className="seg-ctl" role="radiogroup" aria-label={t('session.codexThread')}>
+          {(['keep', 'archive', 'delete'] as const).map((v) => (
+            <button key={v} type="button" role="radio" aria-checked={thread === v} onClick={() => setThread(v)}>
+              {t(`session.thread.${v}`)}
+            </button>
+          ))}
+        </div>
       ) : null}
     </ConfirmDialog>
   );

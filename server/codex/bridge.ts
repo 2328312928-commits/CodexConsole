@@ -1,8 +1,15 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import os from 'node:os';
+import path from 'node:path';
 import readline from 'node:readline';
+import { promisify } from 'node:util';
 import type { CodexAccount, RateLimitSnapshot } from '../../shared/codex.js';
 import { RpcError, RpcPeer, type RpcId } from './rpc.js';
+
+const runFile = promisify(execFile);
+
+const WARNING_METHODS = new Set(['warning', 'configWarning', 'deprecationNotice', 'guardianWarning', 'model/rerouted']);
 
 export type BridgeState = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
 
@@ -61,6 +68,7 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
   private peer: RpcPeer | null = null;
   private readonly loadedThreads = new Set<string>();
   private readonly stderrTail: string[] = [];
+  private readonly warningLog: Array<{ at: number; kind: string; message: string }> = [];
   private readyWaiters: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
   private backoffMs: number;
   private restartTimer: NodeJS.Timeout | null = null;
@@ -120,6 +128,33 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
 
   stderr(): string[] {
     return [...this.stderrTail];
+  }
+
+  /** Recent warnings and notices Codex reported (config problems, deprecations, model reroutes). */
+  warnings(): Array<{ at: number; kind: string; message: string }> {
+    return [...this.warningLog];
+  }
+
+  /** Run a Codex CLI subcommand (e.g. `doctor`) the same way the app-server is started. */
+  async runCli(args: string[], timeoutMs = 60_000): Promise<{ ok: boolean; output: string }> {
+    const prefix = (this.opts.args ?? ['app-server']).filter((a) => a !== 'app-server');
+    try {
+      const { stdout, stderr } = await runFile(this.opts.bin, [...prefix, ...args], { env: this.opts.env ?? codexChildEnv(), timeout: timeoutMs, maxBuffer: 1024 * 1024 });
+      return { ok: true, output: `${stdout}${stderr}` };
+    } catch (err) {
+      const e = err as { stdout?: string; stderr?: string; message: string };
+      return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}` || e.message };
+    }
+  }
+
+  /** Codex's home folder (config.toml, prompts/, sessions). */
+  get codexHome(): string {
+    return this.opts.env?.CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex');
+  }
+
+  /** The thread has to be loaded again (e.g. to apply thread-level config). */
+  markThreadUnloaded(threadId: string): void {
+    this.loadedThreads.delete(threadId);
   }
 
   isThreadLoaded(threadId: string): boolean {
@@ -246,7 +281,9 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
         'initialize',
         {
           clientInfo: { name: 'codex_console', title: 'Codex Console', version: this.opts.clientVersion },
-          capabilities: { experimentalApi: false, requestAttestation: false },
+          // Plan mode, background terminals and memories are only on the experimental API.
+          // The Codex version is pinned and `npm run codex:check` verifies every method used.
+          capabilities: { experimentalApi: true, requestAttestation: false },
         },
         30_000,
       );
@@ -286,8 +323,16 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
       this.status.rateLimitsAt = Date.now();
       this.emit('rateLimits', snap);
       this.emitStatus();
-    } else if (method === 'account/updated') {
+    } else if (method === 'account/updated' || method === 'account/login/completed') {
       void this.refreshAccount().catch(() => undefined);
+    } else if (WARNING_METHODS.has(method)) {
+      const p = params as { message?: unknown; summary?: unknown; details?: unknown; fromModel?: unknown; toModel?: unknown } | undefined;
+      const message =
+        method === 'model/rerouted'
+          ? `${String(p?.fromModel ?? '?')} → ${String(p?.toModel ?? '?')}`
+          : String(p?.message ?? p?.summary ?? p?.details ?? JSON.stringify(params ?? {})).slice(0, 1000);
+      this.warningLog.push({ at: Date.now(), kind: method, message });
+      if (this.warningLog.length > 100) this.warningLog.shift();
     }
     this.emit('notification', method, params);
   }

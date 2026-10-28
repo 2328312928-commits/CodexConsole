@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import type { CommandResult, EffectiveSettings, ModelInfo, ReviewTarget, SessionInfo, SessionSettings, SessionStatus, SkillInfo, ThreadGoal } from '../../../../shared/api.js';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import type { BackgroundTerminal, CommandResult, EffectiveSettings, ModelInfo, ReviewTarget, SessionInfo, SessionSettings, SessionStatus, SkillInfo, ThreadGoal } from '../../../../shared/api.js';
 import { del, get, patch, post, qs } from '../../api';
-import { ErrorAlert, Modal, Spinner } from '../../components/ui';
+import { ErrorAlert, InfoTip, Modal, Spinner } from '../../components/ui';
 import { fmtCompact, fmtDuration } from '../../format';
 import type { MessageKey } from '../../../../shared/i18n/index.js';
 import { useI18n } from '../../i18n';
@@ -12,109 +12,292 @@ import { DiffView } from './Transcript';
 const SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
 const APPROVALS = ['untrusted', 'on-request', 'never'] as const;
 
-/** Model, reasoning, sandbox, approvals and network for one session ("Default" = console default). */
-export function SettingsDialog({ session, models, onClose, onSaved }: { session: SessionInfo; models: ModelInfo[]; onClose: () => void; onSaved: (s: SessionInfo) => void }) {
+/** Segmented control for a nullable choice ("Default" = null). */
+function Choice<T extends string | boolean>({ value, options, onChange, label }: { value: T | null; options: Array<{ value: T | null; label: string; title?: string }>; onChange: (v: T | null) => void; label: string }) {
+  return (
+    <div className="seg-ctl wrap" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button key={String(o.value)} type="button" role="radio" aria-checked={value === o.value} title={o.title} onClick={() => onChange(o.value)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** How Codex may work in this session: permissions, reviewer, network, web search, folders, memory. */
+export function SettingsDialog({ session, onClose, onSaved }: { session: SessionInfo; models?: ModelInfo[]; onClose: () => void; onSaved: (s: SessionInfo) => void }) {
   const { t } = useI18n();
   const [form, setForm] = useState<SessionSettings>(session.settings);
+  const [roots, setRoots] = useState((session.settings.writableRoots ?? []).join('\n'));
   const [effective, setEffective] = useState<EffectiveSettings | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     get<{ effective: EffectiveSettings }>(`/api/sessions/${session.id}`)
       .then((r) => setEffective(r.effective))
       .catch(setError);
   }, [session.id]);
-  const model = models.find((m) => m.id === form.model) ?? models.find((m) => m.isDefault);
+  const set = (patch: Partial<SessionSettings>) => setForm((f) => ({ ...f, ...patch }));
   const save = async (e: FormEvent) => {
     e.preventDefault();
+    setBusy(true);
+    setError(null);
     try {
-      const res = await patch<{ session: SessionInfo }>(`/api/sessions/${session.id}/settings`, form);
+      const writableRoots = roots
+        .split('\n')
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const res = await patch<{ session: SessionInfo }>(`/api/sessions/${session.id}/settings`, { ...form, writableRoots: writableRoots.length ? writableRoots : null });
       onSaved(res.session);
       onClose();
     } catch (err) {
       setError(err);
+      setBusy(false);
     }
   };
-  const opt = (v: string | null) => v ?? '';
+  const def = (label: string) => ({ value: null, label: t('settings.useDefault'), title: label });
   return (
     <Modal title={t('settings.sessionTitle')} onClose={onClose}>
-      <form onSubmit={save}>
-        <div className="field">
-          <label htmlFor="st-model">{t('session.model')}</label>
-          <select id="st-model" value={opt(form.model)} onChange={(e) => setForm({ ...form, model: e.target.value || null, effort: null })}>
-            <option value="">{t('session.defaultModel')}</option>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.displayName}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="st-effort">{t('session.effort')}</label>
-          <select id="st-effort" value={opt(form.effort)} onChange={(e) => setForm({ ...form, effort: e.target.value || null })}>
-            <option value="">{t('session.defaultModel')}</option>
-            {(model?.efforts ?? []).map((x) => (
-              <option key={x} value={x}>
-                {x}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="st-sandbox">{t('settings.sandbox')}</label>
-          <select id="st-sandbox" value={opt(form.sandbox)} onChange={(e) => setForm({ ...form, sandbox: (e.target.value || null) as SessionSettings['sandbox'] })}>
-            <option value="">{t('settings.useDefault')}</option>
-            {SANDBOXES.map((x) => (
-              <option key={x} value={x}>
-                {t(`sandbox.${x}`)}
-              </option>
-            ))}
-          </select>
+      <form onSubmit={save} className="settings-form">
+        <div className="setting-row">
+          <span className="label-text">{t('settings.sandbox')}</span>
+          <Choice
+            label={t('settings.sandbox')}
+            value={form.sandbox}
+            onChange={(v) => set({ sandbox: v })}
+            options={[def(effective ? t(`sandbox.${effective.sandbox}`) : ''), ...SANDBOXES.map((x) => ({ value: x, label: t(`sandbox.${x}`) }))]}
+          />
           {form.sandbox === 'danger-full-access' ? (
             <span className="hint danger-text">
               <Icon name="alert" size={13} /> {t('settings.fullAccessWarning')}
             </span>
           ) : null}
         </div>
-        <div className="field">
-          <label htmlFor="st-approvals">{t('settings.approvalPolicy')}</label>
-          <select id="st-approvals" value={opt(form.approvalPolicy)} onChange={(e) => setForm({ ...form, approvalPolicy: (e.target.value || null) as SessionSettings['approvalPolicy'] })}>
-            <option value="">{t('settings.useDefault')}</option>
-            {APPROVALS.map((x) => (
-              <option key={x} value={x}>
-                {t(`approvalPolicy.${x}`)}
-              </option>
-            ))}
-          </select>
+        <div className="setting-row">
+          <span className="label-text">{t('settings.approvalPolicy')}</span>
+          <Choice
+            label={t('settings.approvalPolicy')}
+            value={form.approvalPolicy}
+            onChange={(v) => set({ approvalPolicy: v })}
+            options={[def(''), ...APPROVALS.map((x) => ({ value: x, label: t(`approvalPolicy.${x}`) }))]}
+          />
+        </div>
+        <div className="setting-row">
+          <span className="label-text">{t('settings.reviewer')}</span>
+          <Choice
+            label={t('settings.reviewer')}
+            value={form.approvalsReviewer}
+            onChange={(v) => set({ approvalsReviewer: v })}
+            options={[def(''), { value: 'user', label: t('reviewer.user') }, { value: 'auto_review', label: t('reviewer.auto'), title: t('reviewer.autoHint') }]}
+          />
+        </div>
+        <div className="setting-row">
+          <span className="label-text">{t('settings.network')}</span>
+          <Choice
+            label={t('settings.network')}
+            value={form.networkAccess}
+            onChange={(v) => set({ networkAccess: v })}
+            options={[def(''), { value: true, label: t('common.on') }, { value: false, label: t('common.off') }]}
+          />
+        </div>
+        <div className="setting-row">
+          <span className="label-text">{t('settings.webSearch')}</span>
+          <Choice
+            label={t('settings.webSearch')}
+            value={form.webSearch}
+            onChange={(v) => set({ webSearch: v })}
+            options={[def(''), ...(['disabled', 'cached', 'live'] as const).map((x) => ({ value: x, label: t(`webSearch.${x}`) }))]}
+          />
+        </div>
+        <div className="setting-row">
+          <span className="label-text">{t('settings.memory')}</span>
+          <Choice
+            label={t('settings.memory')}
+            value={form.memory}
+            onChange={(v) => set({ memory: v })}
+            options={[def(''), { value: true, label: t('common.on') }, { value: false, label: t('common.off') }]}
+          />
         </div>
         <div className="field">
-          <label htmlFor="st-network">{t('settings.network')}</label>
-          <select
-            id="st-network"
-            value={form.networkAccess === null ? '' : form.networkAccess ? 'on' : 'off'}
-            onChange={(e) => setForm({ ...form, networkAccess: e.target.value === '' ? null : e.target.value === 'on' })}
-          >
-            <option value="">{t('settings.useDefault')}</option>
-            <option value="on">{t('codex.networkOn')}</option>
-            <option value="off">{t('codex.networkOff')}</option>
-          </select>
+          <label htmlFor="st-roots">
+            {t('settings.writableRoots')} <InfoTip text={t('settings.writableRootsHint')} />
+          </label>
+          <textarea id="st-roots" className="mono" rows={2} value={roots} onChange={(e) => setRoots(e.target.value)} spellCheck={false} placeholder={t('settings.writableRootsPlaceholder')} />
         </div>
-        {effective ? (
-          <p className="muted" style={{ fontSize: 13 }}>
-            {t('settings.effectiveNow', {
-              sandbox: t(`sandbox.${effective.sandbox}`),
-              approvals: t(`approvalPolicy.${effective.approvalPolicy}`),
-              network: effective.networkAccess ? t('codex.networkOn') : t('codex.networkOff'),
-            })}
-          </p>
-        ) : null}
         <ErrorAlert error={error} />
-        <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
+        <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>
+          <button type="button" className="btn" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+          <button type="submit" className="btn primary" disabled={busy}>
+            {t('common.save')}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** Commands handled in the browser (no server round trip). */
+export const CLIENT_COMMANDS = ['/copy', '/export', '/feedback', '/usage', '/resume', '/experimental', '/hooks', '/plugins', '/apps', '/memories', '/delete', '/ps', '/cd', '/rename', '/permissions'] as const;
+export type ClientCommand = (typeof CLIENT_COMMANDS)[number];
+
+/** Background processes Codex started (`/ps`), with stop buttons (`/stop`). */
+export function TerminalsDialog({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const { t } = useI18n();
+  const [list, setList] = useState<BackgroundTerminal[] | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const load = useCallback(() => {
+    get<{ terminals: BackgroundTerminal[] }>(`/api/sessions/${sessionId}/terminals`)
+      .then((r) => setList(r.terminals))
+      .catch(setError);
+  }, [sessionId]);
+  useEffect(load, [load]);
+  const stop = async (processId: string | null) => {
+    try {
+      await post(`/api/sessions/${sessionId}/terminals/stop`, { processId });
+      load();
+    } catch (err) {
+      setError(err);
+    }
+  };
+  return (
+    <Modal title={t('terminals.title')} onClose={onClose}>
+      <ErrorAlert error={error} />
+      {list === null ? (
+        error ? null : <Spinner />
+      ) : list.length === 0 ? (
+        <p className="empty compact">{t('terminals.none')}</p>
+      ) : (
+        <>
+          <ul className="list-rows">
+            {list.map((x) => (
+              <li key={x.processId}>
+                <Icon name="terminal" size={15} />
+                <div className="grow">
+                  <div className="mono clip-text">{x.command}</div>
+                  <div className="muted small-text">
+                    {[
+                      x.osPid !== null ? t('terminals.pid', { pid: x.osPid }) : null,
+                      x.cpuPercent !== null ? t('terminals.cpu', { n: x.cpuPercent.toFixed(1) }) : null,
+                      x.rssKb !== null ? t('unit.mb', { n: Math.round(x.rssKb / 1024) }) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                </div>
+                <button type="button" className="btn small danger" onClick={() => void stop(x.processId)}>
+                  {t('terminals.stop')}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
+            <button type="button" className="btn danger" onClick={() => void stop(null)}>
+              {t('terminals.stopAll')}
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/** Send feedback to the Codex team (`/feedback`). */
+export function FeedbackDialog({ url, onClose }: { url: string; onClose: () => void }) {
+  const { t } = useI18n();
+  const [classification, setClassification] = useState<'bug' | 'bad_result' | 'good_result' | 'other'>('bug');
+  const [reason, setReason] = useState('');
+  const [includeLogs, setIncludeLogs] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  if (sent) {
+    return (
+      <Modal title={t('feedback.title')} onClose={onClose}>
+        <p className="empty compact">
+          <Icon name="check" /> {t('feedback.sent')}
+        </p>
+      </Modal>
+    );
+  }
+  return (
+    <Modal title={t('feedback.title')} onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError(null);
+          try {
+            await post(url, { classification, reason: reason.trim() || null, includeLogs });
+            setSent(true);
+          } catch (err) {
+            setError(err);
+            setBusy(false);
+          }
+        }}
+      >
+        <div className="setting-row">
+          <Choice
+            label={t('feedback.kind')}
+            value={classification}
+            onChange={(v) => v && setClassification(v)}
+            options={(['bug', 'bad_result', 'good_result', 'other'] as const).map((x) => ({ value: x, label: t(`feedback.${x}`) }))}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="fb-reason">{t('feedback.details')}</label>
+          <textarea id="fb-reason" rows={4} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={4000} />
+        </div>
+        <label className="checkbox" style={{ marginBottom: 12 }}>
+          <input type="checkbox" checked={includeLogs} onChange={(e) => setIncludeLogs(e.target.checked)} />
+          {t('feedback.includeLogs')} <InfoTip text={t('feedback.includeLogsHint')} />
+        </label>
+        <ErrorAlert error={error} />
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button type="button" className="btn" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+          <button type="submit" className="btn primary" disabled={busy}>
+            {t('feedback.send')}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** Move the session to another folder in the workspace (`/cd`). */
+export function FolderDialog({ session, onClose, onSaved }: { session: SessionInfo; onClose: () => void; onSaved: (s: SessionInfo) => void }) {
+  const { t } = useI18n();
+  const [value, setValue] = useState(session.workspacePath ?? '');
+  const [error, setError] = useState<unknown>(null);
+  return (
+    <Modal title={t('folder.title')} onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setError(null);
+          try {
+            onSaved((await post<{ session: SessionInfo }>(`/api/sessions/${session.id}/folder`, { path: value.trim() })).session);
+            onClose();
+          } catch (err) {
+            setError(err);
+          }
+        }}
+      >
+        <div className="field">
+          <label htmlFor="cd-path">{t('folder.path')}</label>
+          <input id="cd-path" className="mono" value={value} onChange={(e) => setValue(e.target.value)} spellCheck={false} autoFocus />
+        </div>
+        <ErrorAlert error={error} />
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button type="button" className="btn" onClick={onClose}>
             {t('common.cancel')}
           </button>
           <button type="submit" className="btn primary">
-            {t('common.save')}
+            {t('folder.change')}
           </button>
         </div>
       </form>
@@ -240,7 +423,25 @@ function StatusBody({ status }: { status: SessionStatus }) {
         <dt>{t('settings.approvalPolicy')}</dt>
         <dd>{t(`approvalPolicy.${e.approvalPolicy}`)}</dd>
         <dt>{t('settings.network')}</dt>
-        <dd>{e.networkAccess ? t('codex.networkOn') : t('codex.networkOff')}</dd>
+        <dd>{e.networkAccess ? t('common.on') : t('common.off')}</dd>
+        <dt>{t('picker.summary')}</dt>
+        <dd>{e.summary ? t(`summary.${e.summary}`) : t('summary.auto')}</dd>
+        <dt>{t('picker.speed')}</dt>
+        <dd>{e.serviceTier ? t('picker.fast') : t('picker.standard')}</dd>
+        <dt>{t('composer.plan')}</dt>
+        <dd>{e.mode === 'plan' ? t('common.on') : t('common.off')}</dd>
+        <dt>{t('settings.reviewer')}</dt>
+        <dd>{e.approvalsReviewer === 'auto_review' ? t('reviewer.auto') : t('reviewer.user')}</dd>
+        <dt>{t('settings.webSearch')}</dt>
+        <dd>{e.webSearch ? t(`webSearch.${e.webSearch === 'indexed' ? 'cached' : e.webSearch}`) : t('settings.useDefault')}</dd>
+        {e.writableRoots.length ? (
+          <>
+            <dt>{t('settings.writableRoots')}</dt>
+            <dd className="mono">{e.writableRoots.join(', ')}</dd>
+          </>
+        ) : null}
+        <dt>{t('folder.path')}</dt>
+        <dd className="mono">{status.session.cwd}</dd>
         <dt>{t('sessionStatus.contextWindow')}</dt>
         <dd>{status.contextWindow ? t('sessionStatus.tokensN', { n: fmtCompact(lang, status.contextWindow) }) : '—'}</dd>
         <dt>{t('sessionStatus.lastTurn')}</dt>
@@ -386,7 +587,11 @@ export function CommandResultDialog({ result, onClose }: { result: CommandResult
                 ? t('diff.title')
                 : result.kind === 'goal'
                   ? t('goal.title')
-                  : t('commands.done');
+                  : result.kind === 'terminals'
+                    ? t('terminals.title')
+                    : result.kind === 'info'
+                      ? t('cmd.pwd')
+                      : t('commands.done');
   return (
     <Modal title={title} onClose={onClose} wide={result.kind === 'diff'}>
       {result.kind === 'help' ? (
@@ -434,6 +639,20 @@ export function CommandResultDialog({ result, onClose }: { result: CommandResult
         <StatusBody status={result.status} />
       ) : result.kind === 'diff' ? (
         <DiffBlock turnDiff={result.turnDiff} gitDiff={result.gitDiff} gitError={result.gitError} />
+      ) : result.kind === 'terminals' ? (
+        result.terminals.length === 0 ? (
+          <p className="muted">{t('terminals.none')}</p>
+        ) : (
+          <ul>
+            {result.terminals.map((x) => (
+              <li key={x.processId} className="mono">
+                {x.command}
+              </li>
+            ))}
+          </ul>
+        )
+      ) : result.kind === 'info' ? (
+        <p className="mono">{result.text}</p>
       ) : result.kind === 'goal' ? (
         <p>
           {result.goal ? (
@@ -471,13 +690,39 @@ export function commandKey(name: string) {
     '/mcp': 'cmd.mcp',
     '/goal': 'cmd.goal',
     '/mention': 'cmd.mention',
+    '/plan': 'cmd.plan',
+    '/permissions': 'cmd.permissions',
+    '/rename': 'cmd.rename',
+    '/archive': 'cmd.archive',
+    '/unarchive': 'cmd.unarchive',
+    '/delete': 'cmd.delete',
+    '/resume': 'cmd.resume',
+    '/clear': 'cmd.clear',
+    '/cd': 'cmd.cd',
+    '/pwd': 'cmd.pwd',
+    '/ps': 'cmd.ps',
+    '/stop': 'cmd.stop',
+    '/summary': 'cmd.summary',
+    '/copy': 'cmd.copy',
+    '/export': 'cmd.export',
+    '/feedback': 'cmd.feedback',
+    '/usage': 'cmd.usage',
+    '/experimental': 'cmd.experimental',
+    '/hooks': 'cmd.hooks',
+    '/plugins': 'cmd.plugins',
+    '/apps': 'cmd.apps',
+    '/memories': 'cmd.memories',
     '!': 'cmd.shell',
   } as const;
   return map[name as keyof typeof map] ?? 'cmd.help';
 }
 
 export const COMPOSER_COMMANDS = [
-  '/help', '/new', '/fork', '/undo', '/model', '/approvals', '/sandbox', '/network', '/review', '/compact', '/diff', '/init', '/mention', '/skills', '/status', '/mcp', '/goal', '!',
+  '/help', '/new', '/clear', '/resume', '/fork', '/undo', '/rename', '/archive', '/unarchive', '/delete',
+  '/model', '/permissions', '/approvals', '/sandbox', '/network', '/plan',
+  '/review', '/compact', '/summary', '/diff', '/status', '/goal', '/init',
+  '/mention', '/skills', '/mcp', '/ps', '/stop', '/cd', '/pwd',
+  '/copy', '/export', '/feedback', '/usage', '/experimental', '/hooks', '/plugins', '/apps', '/memories', '!',
 ];
 
 /** Fuzzy file search inside the session folder, for @-mentions. */

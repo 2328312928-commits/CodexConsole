@@ -163,6 +163,15 @@ export class McpManager {
     return { authorizationUrl: res.authorizationUrl };
   }
 
+  /** Read one of a server's resources (Codex's MCP resource tool). */
+  async readResource(name: string, uri: string): Promise<{ contents: unknown[] }> {
+    if (!MCP_NAME_RE.test(name)) throw new ApiError(400, 'invalid_name');
+    const res = await this.bridge.request<{ contents: unknown[] }>('mcpServer/resource/read', { server: name, uri }).catch((err) => {
+      throw new ApiError(502, 'mcp_error', (err as Error).message);
+    });
+    return { contents: Array.isArray(res.contents) ? res.contents : [] };
+  }
+
   async logout(name: string): Promise<void> {
     if (!MCP_NAME_RE.test(name)) throw new ApiError(400, 'invalid_name');
     try {
