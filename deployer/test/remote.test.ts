@@ -1,5 +1,4 @@
 import { gzipSync } from 'node:zlib';
-import ssh2 from 'ssh2';
 import { afterEach, describe, expect, it } from 'vitest';
 import { tar } from '../scripts/tar.mjs';
 import {
@@ -16,7 +15,7 @@ import {
   type DeployStep,
   type Site,
 } from '../src/remote.js';
-import { FAKE_KEY, startFakeServer } from './fake-ssh-server.mjs';
+import { FAKE_KEY, startFakeServer, testKeyPair } from './fake-ssh-server.mjs';
 
 const site: Site = { mode: 'ip', lang: 'en' };
 const bundle = gzipSync(
@@ -101,7 +100,7 @@ describe('deploy over SSH', () => {
   });
 
   it('signs in with a key, and asks for a sudo password only when sudo needs one', async () => {
-    const keys = ssh2.utils.generateKeyPairSync('ed25519');
+    const keys = testKeyPair();
     const { server, known } = await fake({ root: false, user: 'ubuntu', sudo: 'password', password: undefined, sudoPassword: 'sudo-pw', publicKey: keys.public });
     const conn: Connection = { host: '127.0.0.1', port: server.port, username: 'ubuntu', privateKey: keys.private };
     const missing = await deploy(conn, known, bundle, site, () => undefined).catch((e: unknown) => e);

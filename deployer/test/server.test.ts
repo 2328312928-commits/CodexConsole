@@ -3,12 +3,11 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
-import ssh2 from 'ssh2';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tar } from '../scripts/tar.mjs';
 import { findKeys, startServer, type RunningServer } from '../src/server.js';
 import { Store } from '../src/store.js';
-import { startFakeServer } from './fake-ssh-server.mjs';
+import { startFakeServer, testKeyPair } from './fake-ssh-server.mjs';
 
 const PAGE = '<!doctype html><script nonce="__NONCE__"></script>';
 const bundle = gzipSync(tar([{ name: 'deploy/install.sh', data: Buffer.from('#!/usr/bin/env bash\n') }]));
@@ -165,7 +164,7 @@ describe('deploying from the page', () => {
   });
 
   it('uses a key from the SSH folder, by name only', async () => {
-    const keys = ssh2.utils.generateKeyPairSync('ed25519');
+    const keys = testKeyPair();
     fs.writeFileSync(path.join(dir, 'ssh', 'id_ed25519'), keys.private);
     fs.writeFileSync(path.join(dir, 'ssh', 'id_ed25519.pub'), keys.public);
     fs.writeFileSync(path.join(dir, 'ssh', 'id_notakey'), 'hello');

@@ -10,6 +10,17 @@ const CLI = '/usr/local/bin/codex-console';
 export const FAKE_KEY = `cck_0123456789abcdef.${'A'.repeat(43)}`;
 
 /**
+ * An Ed25519 key pair for the tests. ssh2's generator drops a leading zero byte of the public key
+ * (about 1 key in 256) and writes a key it cannot read back, so those are skipped.
+ */
+export function testKeyPair() {
+  for (;;) {
+    const keys = utils.generateKeyPairSync('ed25519');
+    if (!(utils.parseKey(keys.private) instanceof Error)) return keys;
+  }
+}
+
+/**
  * @param {{
  *   user?: string, password?: string, publicKey?: string,
  *   root?: boolean, sudo?: 'nopasswd' | 'password' | 'none', sudoPassword?: string,
@@ -19,7 +30,7 @@ export const FAKE_KEY = `cck_0123456789abcdef.${'A'.repeat(43)}`;
  */
 export async function startFakeServer(opts = {}) {
   const o = { user: 'root', password: 'server-pw', root: true, sudo: 'nopasswd', installed: false, setUp: false, checkExit: 0, installExit: 0, site: 'https://203.0.113.7', ...opts };
-  const hostKey = o.hostKey ?? utils.generateKeyPairSync('ed25519').private;
+  const hostKey = o.hostKey ?? testKeyPair().private;
   const parsedHost = utils.parseKey(hostKey);
   const allowedKey = o.publicKey ? utils.parseKey(o.publicKey) : null;
   /** @type {{ installed: boolean, setUp: boolean, commands: string[], uploads: string[][], installers: string[], confirmed: number }} */
