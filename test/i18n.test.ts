@@ -49,7 +49,7 @@ describe('translations', () => {
 // Any visible text in the UI must come from t(...). Catch literals in JSX text and in
 // user-facing attributes.
 const WEB = fileURLToPath(new URL('../web/src', import.meta.url));
-const ALLOWED_LITERALS = new Set(['XXXXX-XXXXX-XXXXX-XXXXX', 'my-project', 'npm run setup', '中文', 'EN']);
+const ALLOWED_LITERALS = new Set(['my-project', 'npm run setup', '中文', 'EN']);
 
 function tsxFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {

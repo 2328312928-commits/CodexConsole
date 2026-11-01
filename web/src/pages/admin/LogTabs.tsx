@@ -107,7 +107,7 @@ export function SecurityTab({ onAdminLost }: { onAdminLost: () => void }) {
             </option>
           ))}
         </select>
-        <SourceFilter id="sec-source" value={source} onChange={(v) => { setSource(v); setOffset(0); }} onAdminLost={onAdminLost} devices={false} />
+        <SourceFilter id="sec-source" value={source} onChange={(v) => { setSource(v); setOffset(0); }} onAdminLost={onAdminLost} />
       </div>
       <ErrorAlert error={error} />
       {!data ? (

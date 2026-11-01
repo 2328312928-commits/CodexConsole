@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import type { ServerEvent } from '../shared/api.js';
+import { consoleKeySettings, type ApiKeySettings } from '../server/auth/apiKeys.js';
 import { generateTotpSecret, totpCode } from '../server/auth/totp.js';
 import { loadConfig } from '../server/config.js';
 import { buildApp } from '../server/http/app.js';
@@ -85,7 +86,11 @@ export async function makeHarness(opts: { signedIn?: boolean; env?: Record<strin
 export class Client {
   cookies = new Map<string, string>();
 
-  constructor(private readonly app: FastifyInstance) {}
+  /** `ip`: the address the requests come from (default 127.0.0.1). */
+  constructor(
+    private readonly app: FastifyInstance,
+    private readonly ip?: string,
+  ) {}
 
   async req(method: string, url: string, opts: { body?: unknown; headers?: Record<string, string>; raw?: Buffer; contentType?: string } = {}) {
     const headers: Record<string, string> = { host: HOST, origin: ORIGIN, 'x-codex-console': '1', ...opts.headers };
@@ -98,7 +103,7 @@ export class Client {
       payload = JSON.stringify(opts.body);
       headers['content-type'] = 'application/json';
     }
-    const res = await this.app.inject({ method: method as 'GET', url, headers, payload });
+    const res = await this.app.inject({ method: method as 'GET', url, headers, payload, ...(this.ip ? { remoteAddress: this.ip } : {}) });
     const setCookie = res.headers['set-cookie'];
     for (const c of Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : []) {
       const [pair] = c.split(';');
@@ -114,12 +119,37 @@ export class Client {
   post = (url: string, body?: unknown) => this.req('POST', url, { body: body ?? {} });
 }
 
-export async function pairAndLogin(h: Harness, client = new Client(h.app)): Promise<Client> {
-  const { code } = h.runtime.devices.create('Test device', null);
-  const pair = await client.post('/api/auth/pair', { code });
-  if (pair.statusCode !== 200) throw new Error(`pair failed: ${pair.body}`);
-  const login = await client.post('/api/auth/login', { password: h.password, code: totpCode(h.totpSecret, Date.now()) });
-  if (login.statusCode !== 200) throw new Error(`login failed: ${login.body}`);
+/** An API key for one of your devices, issued like `npm run setup -- --new-key` does. */
+export function issueConsoleKey(h: Harness, label = 'Test device', overrides: Partial<ApiKeySettings> = {}) {
+  const folder = `api/${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${crypto.randomBytes(3).toString('hex')}`;
+  return h.runtime.keys.create({ ...consoleKeySettings(label), ...overrides }, folder);
+}
+
+/** Open the admin area for a signed-in browser: owner password plus an unused authenticator code. */
+export async function unlockAdmin(h: Harness, client: Client): Promise<void> {
+  // Each code works once; the next time step is still inside the accepted window.
+  for (const offset of [0, 30_000]) {
+    const res = await client.post('/api/auth/admin', { password: h.password, code: totpCode(h.totpSecret, Date.now() + offset) });
+    if (res.statusCode === 200) return;
+  }
+  throw new Error('admin unlock failed');
+}
+
+/**
+ * Mark a browser's sign-in as admin-unlocked without spending an authenticator code (only
+ * three codes are usable per 30 seconds). The unlock route itself has its own tests.
+ */
+export function markAdmin(h: Harness, client: Client): void {
+  const login = h.runtime.logins.validate(client.cookies.get('ccsess') ?? '');
+  if (!login) throw new Error('not signed in');
+  h.runtime.logins.markAdminVerified(login.id);
+}
+
+/** Sign a browser in with a console key (a new full-console one by default) and unlock admin. */
+export async function signIn(h: Harness, client = new Client(h.app), opts: { key?: string; admin?: boolean } = {}): Promise<Client> {
+  const res = await client.post('/api/auth/key', { key: opts.key ?? issueConsoleKey(h).secret });
+  if (res.statusCode !== 200) throw new Error(`sign-in failed: ${res.body}`);
+  if (opts.admin !== false) markAdmin(h, client);
   return client;
 }
 
@@ -187,6 +217,7 @@ export class KeyClient {
 
 export const DEFAULT_KEY = {
   label: 'Test key',
+  consoleAccess: 'none',
   scopes: ['prompt', 'sessions', 'files:read', 'files:write', 'approvals', 'settings', 'mcp:read'],
   quotaTokens: null as number | null,
   quotaPeriod: 'month',

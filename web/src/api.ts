@@ -11,7 +11,7 @@ export class ApiFailure extends Error {
   }
 }
 
-const AUTH_CODES = new Set(['device_required', 'login_required', 'setup_required']);
+const AUTH_CODES = new Set(['login_required', 'setup_required']);
 
 /** Lets the app re-check its auth state when any call reports a lost login. */
 export const authEvents = new EventTarget();

@@ -270,8 +270,8 @@ export function loadConfig(env: Env = process.env): AppConfig {
       uploadBytesPerHour: int(env, 'CC_RATE_UPLOAD_MB_PER_HOUR', 2048, 1, 10_000_000) * 1024 * 1024,
     },
     sessions: {
-      idleMs: int(env, 'CC_SESSION_IDLE_DAYS', 7, 1, 365) * 86_400_000,
-      maxMs: int(env, 'CC_SESSION_MAX_DAYS', 30, 1, 3650) * 86_400_000,
+      idleMs: int(env, 'CC_SESSION_IDLE_HOURS', 12, 1, 8760) * 3_600_000,
+      maxMs: int(env, 'CC_SESSION_MAX_DAYS', 7, 1, 365) * 86_400_000,
       adminIdleMs: int(env, 'CC_ADMIN_IDLE_MIN', 15, 1, 1440) * 60_000,
     },
     logRetentionDays: int(env, 'CC_LOG_RETENTION_DAYS', 180, 1, 3650),

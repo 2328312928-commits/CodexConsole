@@ -258,6 +258,12 @@ export class TurnManager extends EventEmitter<TurnEvents> {
     return n;
   }
 
+  /** The key whose turn is running in this session (null: none), or undefined when nothing runs. */
+  runningKey(sessionId: string): string | null | undefined {
+    const t = this.bySession.get(sessionId);
+    return t ? (t.apiKey?.id ?? null) : undefined;
+  }
+
   private emitEvent(sessionId: string, event: ServerEvent): void {
     this.emit('event', sessionId, event);
   }

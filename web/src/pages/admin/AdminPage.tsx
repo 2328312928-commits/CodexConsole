@@ -1,24 +1,25 @@
 import { useState, type FormEvent } from 'react';
 import type { AuthState } from '../../../../shared/api.js';
 import { post } from '../../api';
-import { ErrorAlert } from '../../components/ui';
 import { useI18n } from '../../i18n';
 import { Icon } from '../../icons';
 import { navigate, usePath } from '../../router';
 import { ApiKeysTab } from './ApiKeysTab';
+import { LockedOrError } from '../AuthPages';
 import { CodexTab } from './CodexTab';
-import { DevicesTab } from './DevicesTab';
 import { OverviewTab } from './OverviewTab';
 import { RequestsTab } from './RequestsTab';
 import { SecurityTab, TransfersTab } from './LogTabs';
 import { McpTab } from './McpTab';
 import { SettingsTab } from './SettingsTab';
 
-const TABS = ['overview', 'codex', 'requests', 'devices', 'keys', 'mcp', 'files', 'security', 'settings'] as const;
+const TABS = ['overview', 'codex', 'requests', 'keys', 'mcp', 'files', 'security', 'settings'] as const;
 type Tab = (typeof TABS)[number];
 
+/** Keys never open the admin area: it needs the owner password and an authenticator code. */
 function Unlock({ onAuth }: { onAuth: (s: AuthState) => void }) {
   const { t } = useI18n();
+  const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -27,7 +28,7 @@ function Unlock({ onAuth }: { onAuth: (s: AuthState) => void }) {
     setBusy(true);
     setError(null);
     try {
-      onAuth(await post<AuthState>('/api/auth/admin/verify', { code: code.replace(/\s/g, '') }));
+      onAuth(await post<AuthState>('/api/auth/admin', { password, code: code.replace(/\s/g, '') }));
     } catch (err) {
       setError(err);
       setCode('');
@@ -43,6 +44,10 @@ function Unlock({ onAuth }: { onAuth: (s: AuthState) => void }) {
         </h1>
         <p>{t('admin.unlock.body')}</p>
         <div className="field">
+          <label htmlFor="admin-password">{t('login.password')}</label>
+          <input id="admin-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required autoFocus />
+        </div>
+        <div className="field">
           <label htmlFor="admin-code">{t('login.code')}</label>
           <input
             id="admin-code"
@@ -51,14 +56,14 @@ function Unlock({ onAuth }: { onAuth: (s: AuthState) => void }) {
             onChange={(e) => setCode(e.target.value.replace(/[^\d\s]/g, '').slice(0, 7))}
             inputMode="numeric"
             autoComplete="one-time-code"
-            autoFocus
+            pattern="\d{3}\s?\d{3}"
             required
           />
           <span className="hint">{t('login.codeHint')}</span>
         </div>
-        <ErrorAlert error={error} />
+        <LockedOrError error={error} />
         <p />
-        <button type="submit" className="btn primary" disabled={busy || code.replace(/\s/g, '').length !== 6}>
+        <button type="submit" className="btn primary" disabled={busy || !password || code.replace(/\s/g, '').length !== 6}>
           {t('admin.unlock.submit')}
         </button>
       </form>
@@ -87,7 +92,6 @@ export function AdminPage({ auth, onAuth }: { auth: AuthState; onAuth: (s: AuthS
     overview: t('adminTab.overview'),
     codex: t('adminTab.codex'),
     requests: t('adminTab.requests'),
-    devices: t('adminTab.devices'),
     keys: t('adminTab.keys'),
     mcp: t('adminTab.mcp'),
     files: t('adminTab.files'),
@@ -108,7 +112,6 @@ export function AdminPage({ auth, onAuth }: { auth: AuthState; onAuth: (s: AuthS
           {tab === 'overview' ? <OverviewTab onAdminLost={onAdminLost} /> : null}
           {tab === 'codex' ? <CodexTab onAdminLost={onAdminLost} /> : null}
           {tab === 'requests' ? <RequestsTab onAdminLost={onAdminLost} /> : null}
-          {tab === 'devices' ? <DevicesTab currentDeviceId={auth.device?.id ?? null} onAdminLost={onAdminLost} /> : null}
           {tab === 'keys' ? <ApiKeysTab onAdminLost={onAdminLost} /> : null}
           {tab === 'mcp' ? <McpTab onAdminLost={onAdminLost} /> : null}
           {tab === 'files' ? <TransfersTab onAdminLost={onAdminLost} /> : null}

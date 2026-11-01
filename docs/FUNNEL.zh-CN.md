@@ -2,7 +2,7 @@
 
 [English](FUNNEL.md)
 
-本指南让**公网 API**（`/v1`，只接受 API 密钥）可以从互联网访问，这样你自己的脚本和设备在任何地方都能调用它。控制台页面和管理区**不会**对外开放：它们仍然只在 `localhost` 上，或通过 `tailscale serve` 只在你的 tailnet 内可用。
+本指南适用于**在家里**运行控制台、没有公网服务器的情况：它让**公网 API**（`/v1`，只接受 API 密钥）可以从互联网访问，这样你自己的脚本在任何地方都能调用它。控制台页面和管理区**不会**对外开放：它们仍然只在 `localhost` 上，或通过 `tailscale serve` 只在你的 tailnet 内可用。如果想把整个控制台部署到公网服务器上，请看 [DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)。
 
 这里的一切都不会自动发生。每条命令都由你自己运行，并且随时可以撤销（见[关闭](#关闭)）。
 
@@ -49,9 +49,9 @@ curl -s --haproxy-protocol http://127.0.0.1:8788/v1/health
 
 ## 2. 创建密钥
 
-在 **管理后台 → API 密钥 → 新建 API 密钥** 中：
+在 **管理后台 → 密钥 → 新建密钥** 中：
 
-1. 只授予工具需要的范围。除非确实需要，不要勾选 `shell` 和 `mcp:manage`。
+1. 把 **控制台登录** 设为“关闭”，只授予工具需要的范围。除非确实需要，不要勾选 `shell` 和 `mcp:manage`。
 2. 设置额度和有效期。
 3. 审批选择 **自动拒绝**，除非你打算亲自回答。
 4. 从对话框中复制密钥。它只显示一次。
@@ -76,7 +76,7 @@ curl -s https://<机器名>.<tailnet>.ts.net:8443/v1/health
 curl -s https://<机器名>.<tailnet>.ts.net:8443/v1/me -H "Authorization: Bearer $CODEX_CONSOLE_KEY"
 ```
 
-这时 **管理后台 → API 密钥** 的“最近使用”下应该显示手机的公网 IP。如果显示的是 `127.0.0.1`，说明 PROXY 头没有送达：检查 `--proxy-protocol=2` 参数。下一步：[API.zh-CN.md](API.zh-CN.md)。
+这时 **管理后台 → 密钥** 的“最近使用”下应该显示手机的公网 IP。如果显示的是 `127.0.0.1`，说明 PROXY 头没有送达：检查 `--proxy-protocol=2` 参数。下一步：[API.zh-CN.md](API.zh-CN.md)。
 
 ## 关闭
 
@@ -85,7 +85,7 @@ tailscale funnel --tls-terminated-tcp=8443 off   # 停止对外开放 API
 tailscale funnel status                          # 确认没有任何东西对外开放
 ```
 
-如果还想关闭监听端口本身，设置 `CC_API_ENABLED=false` 并重启。如果只想停用某个工具，在 **管理后台 → API 密钥** 中吊销它的密钥：无论是否开着 Funnel，都会立即生效。
+如果还想关闭监听端口本身，设置 `CC_API_ENABLED=false` 并重启。如果只想停用某个工具，在 **管理后台 → 密钥** 中吊销它的密钥：无论是否开着 Funnel，都会立即生效。
 
 ## 故障排查
 

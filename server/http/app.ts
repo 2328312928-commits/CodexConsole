@@ -5,7 +5,7 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify, { LogController, type FastifyInstance, type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import { ApiError } from '../lib/errors.js';
-import { cookieNames, eventCtx, type AppDeps } from './context.js';
+import { clientIp, eventCtx, sessionCookie, type AppDeps } from './context.js';
 import { handleError } from './errorHandler.js';
 import { CSP } from './headers.js';
 import { registerAdminRoutes } from './routes/admin.js';
@@ -19,7 +19,7 @@ import { registerSessionRoutes } from './routes/sessions.js';
 const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const UNAUTH_API_PER_MIN = 120;
 /** Client-side routes of the web app; every other non-API path is a 404. */
-const APP_ROUTES = ['/', '/pair', '/s/:sessionId', '/admin', '/admin/:tab'];
+const APP_ROUTES = ['/', '/s/:sessionId', '/admin', '/admin/:tab'];
 
 /**
  * Whether the /api guards apply. The router matches on the *decoded* path, so the raw
@@ -32,7 +32,7 @@ function isApi(req: FastifyRequest): boolean {
 
 export async function buildApp(deps: AppDeps, opts: { logger?: FastifyServerOptions['logger'] } = {}): Promise<FastifyInstance> {
   const { config, limiter, audit } = deps;
-  const names = cookieNames(config);
+  const cookieName = sessionCookie(config);
   const servedOverHttps = Boolean(config.tls) || (config.secureCookies && config.trustProxy !== false);
 
   const app = Fastify({
@@ -52,12 +52,12 @@ export async function buildApp(deps: AppDeps, opts: { logger?: FastifyServerOpti
 
   app.decorateRequest('auth', null as never);
 
-  // 1. Host allowlist (blocks DNS-rebinding), 2. resolve device + login, 3. rate limit, 4. CSRF/Origin.
+  // 1. Host allowlist (blocks DNS-rebinding), 2. resolve the sign-in and its key, 3. rate limit, 4. CSRF/Origin.
   app.addHook('onRequest', async (req, reply) => {
     const host = (req.headers.host ?? '').toLowerCase();
     const forwardedHost = config.trustProxy !== false ? req.host.toLowerCase() : host;
     if (!config.allowedHosts.has(host) && !config.allowedHosts.has(forwardedHost)) {
-      audit.security('host_rejected', { ip: req.ip, userAgent: req.headers['user-agent'] }, { host: host.slice(0, 200) });
+      audit.security('host_rejected', { ip: clientIp(req), userAgent: req.headers['user-agent'] }, { host: host.slice(0, 200) });
       return reply.status(421).send({ error: { code: 'forbidden_host' } });
     }
     // No route needs escapes in its path; refusing them keeps the guards and the router
@@ -66,35 +66,31 @@ export async function buildApp(deps: AppDeps, opts: { logger?: FastifyServerOpti
       return reply.status(400).send({ error: { code: 'path_invalid' } });
     }
 
-    req.auth = { device: null, login: null, admin: false, bearer: false };
-    const authz = req.headers.authorization;
-    const bearer = typeof authz === 'string' && authz.startsWith('Bearer ');
-    const token = bearer ? authz.slice(7).trim() : req.cookies[names.device];
-    if (token) {
-      const r = deps.devices.authenticate(token);
-      if (r.ok) {
-        req.auth.device = r.device;
-        req.auth.bearer = bearer;
-        deps.devices.touch(r.device, req.ip, req.headers['user-agent']);
-      } else if (r.device) {
-        audit.security(r.reason === 'revoked' ? 'revoked_device_used' : 'expired_device_used', { deviceId: r.device.id, ip: req.ip, userAgent: req.headers['user-agent'] });
-      }
-    }
-    const secret = req.cookies[names.session];
-    if (req.auth.device && secret) {
-      const login = deps.logins.validate(secret, req.auth.device.id);
-      if (login) {
-        req.auth.login = login;
-        req.auth.admin = deps.logins.isAdmin(login);
-        deps.logins.touch(login, req.ip);
+    req.auth = { login: null, key: null, admin: false };
+    const ip = clientIp(req);
+    const secret = req.cookies[cookieName];
+    const login = secret ? deps.logins.validate(secret) : null;
+    const key = login ? deps.keys.get(login.api_key_id) : undefined;
+    if (login && key) {
+      // The key is checked on every request: revoking it, letting it expire or taking away
+      // its console access ends the sign-in at once.
+      const problem = deps.keys.consoleProblem(key, ip);
+      if (problem === null) {
+        req.auth = { login, key, admin: deps.logins.isAdmin(login) };
+        deps.logins.touch(login, ip);
+        deps.keys.touch(key, ip);
+      } else if (problem === 'ip_not_allowed') {
+        audit.security('api_key_rejected', { apiKeyId: key.id, ip, userAgent: req.headers['user-agent'] }, { reason: problem, via: 'console' });
+      } else {
+        deps.logins.revoke(login.id);
       }
     }
 
     if (!isApi(req)) return;
-    const device = req.auth.device;
+    const signedIn = req.auth.key;
     const limited = limiter.consume(
-      device ? `api:dev:${device.id}` : `api:ip:${req.ip}`,
-      device ? config.limits.apiPerMinute : UNAUTH_API_PER_MIN,
+      signedIn ? `api:key:${signedIn.id}` : `api:ip:${ip}`,
+      signedIn ? config.limits.apiPerMinute : UNAUTH_API_PER_MIN,
       60_000,
     );
     if (!limited.ok) {
@@ -109,20 +105,18 @@ export async function buildApp(deps: AppDeps, opts: { logger?: FastifyServerOpti
         audit.security('origin_rejected', eventCtx(req), { origin: origin.slice(0, 200) });
         return reply.status(403).send({ error: { code: 'forbidden_origin' } });
       }
-      if (!req.auth.bearer && req.headers['x-codex-console'] !== '1') {
+      if (req.headers['x-codex-console'] !== '1') {
         return reply.status(403).send({ error: { code: 'csrf_header_missing' } });
       }
     }
   });
 
-  // Every /api route requires a login unless it opts out via config.auth.
+  // Every /api route requires a sign-in unless it opts out via config.auth.
   app.addHook('preHandler', async (req) => {
     if (!isApi(req)) return;
     const level = req.routeOptions.config?.auth ?? 'login';
     if (level === 'public') return;
     if (!deps.owner.exists()) throw new ApiError(503, 'setup_required');
-    if (!req.auth.device) throw new ApiError(401, 'device_required');
-    if (level === 'device') return;
     if (!req.auth.login) throw new ApiError(401, 'login_required');
     if (level === 'login') return;
     if (!req.auth.admin) throw new ApiError(403, 'admin_required');
@@ -146,14 +140,15 @@ export async function buildApp(deps: AppDeps, opts: { logger?: FastifyServerOpti
     if (!isApi(req)) return;
     const len = reply.getHeader('content-length');
     audit.api({
-      deviceId: req.auth?.device?.id ?? null,
+      deviceId: null,
+      apiKeyId: req.auth?.key?.id ?? null,
       method: req.method,
       route: req.routeOptions.url ?? req.url.split('?')[0]!,
       status: reply.statusCode,
       durationMs: reply.elapsedTime,
       bytesIn: Number(req.headers['content-length'] ?? 0) || null,
       bytesOut: len === undefined ? null : Number(len),
-      ip: req.ip,
+      ip: clientIp(req),
     });
   });
 

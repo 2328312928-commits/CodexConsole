@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import type { AuthState } from '../../shared/api.js';
 import { authEvents, get, post } from './api';
+import { SignedInKeyContext } from './auth';
 import { CodexStatusProvider } from './codexStatus';
 import { ErrorAlert, LangSwitch, Spinner } from './components/ui';
 import { Topbar } from './components/Topbar';
 import { useI18n } from './i18n';
-import { LoginPage, PairPage, SetupPage } from './pages/AuthPages';
+import { SetupPage, SignInPage } from './pages/AuthPages';
 import { ConsolePage } from './pages/console/ConsolePage';
 import { navigate, usePath } from './router';
 
@@ -68,41 +69,29 @@ export function App() {
     );
   }
 
-  const pairingLink = path === '/pair' && location.hash.includes('code=');
-  if (!auth.setupComplete || !auth.device || !auth.loggedIn || pairingLink) {
+  if (!auth.setupComplete || !auth.loggedIn) {
     return (
       <div className="app">
         <Topbar auth={auth} />
-        <main className="center-page">
-          {!auth.setupComplete ? (
-            <SetupPage />
-          ) : !auth.device || pairingLink ? (
-            <PairPage
-              onPaired={(next) => {
-                setAuth(next);
-                navigate('/', true);
-              }}
-            />
-          ) : (
-            <LoginPage auth={auth} onLoggedIn={setAuth} />
-          )}
-        </main>
+        <main className="center-page">{!auth.setupComplete ? <SetupPage /> : <SignInPage onSignedIn={setAuth} />}</main>
       </div>
     );
   }
 
   return (
     <CodexStatusProvider>
-      <div className="app">
-        <Topbar auth={auth} onSignOut={signOut} />
-        {path.startsWith('/admin') ? (
-          <Suspense fallback={<main className="center-page"><Spinner label={t('common.loading')} /></main>}>
-            <AdminPage auth={auth} onAuth={setAuth} />
-          </Suspense>
-        ) : (
-          <ConsolePage />
-        )}
-      </div>
+      <SignedInKeyContext.Provider value={auth.key}>
+        <div className="app">
+          <Topbar auth={auth} onSignOut={signOut} />
+          {path.startsWith('/admin') ? (
+            <Suspense fallback={<main className="center-page"><Spinner label={t('common.loading')} /></main>}>
+              <AdminPage auth={auth} onAuth={setAuth} />
+            </Suspense>
+          ) : (
+            <ConsolePage />
+          )}
+        </div>
+      </SignedInKeyContext.Provider>
     </CodexStatusProvider>
   );
 }

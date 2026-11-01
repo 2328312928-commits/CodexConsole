@@ -174,7 +174,7 @@ export function OverviewTab({ onAdminLost }: { onAdminLost: () => void }) {
         <Kpi label={t('overview.tokens7d')} value={`${fmtCompact(lang, totals.tokens7d.input)} / ${fmtCompact(lang, totals.tokens7d.output)}`} />
         <Kpi label={t('overview.failed7d')} value={fmtCompact(lang, totals.failed7d)} />
         <Kpi label={t('overview.transfer7d')} value={`${fmtBytes(t, totals.uploadBytes7d)} / ${fmtBytes(t, totals.downloadBytes7d)}`} />
-        <Kpi label={t('overview.activeDevices')} value={String(totals.activeDevices)} />
+        <Kpi label={t('overview.activeSignIns')} value={String(totals.activeSignIns)} />
         <Kpi label={t('overview.securityEvents')} value={String(totals.securityEvents24h)} />
       </div>
 

@@ -1,31 +1,45 @@
-# Codex Console behind Caddy with automatic HTTPS (Let's Encrypt).
-# Needs a DNS name pointing at this machine and ports 80/443 reachable.
-# This makes the console reachable from the internet (it stays protected by
-# device token + password + authenticator code). Tailscale keeps it private instead.
+# Codex Console behind Caddy with automatic HTTPS (Let's Encrypt), for a server you
+# set up by hand. deploy/deploy.sh writes the same thing for you
+# (/etc/caddy/codex-console.caddy). Needs a DNS name pointing at this machine and
+# ports 80/443 reachable. Without a key nobody gets past the sign-in page, and the
+# admin area also needs your password and an authenticator code.
 #
 # In the console's .env:
 #   CC_PUBLIC_ORIGIN=https://console.example.com
 #   CC_TRUST_PROXY=loopback
+#   CC_API_ENABLED=true
+#   CC_API_PUBLIC_ORIGIN=https://console.example.com
+#   CC_API_PROXY_PROTOCOL=off
+#   CC_API_TRUST_PROXY=loopback
 
 console.example.com {
-	encode zstd gzip
+	@static path /assets/*
+	encode @static zstd gzip
+	header -Server
 
-	reverse_proxy 127.0.0.1:8787 {
-		# Stream server-sent events (live Codex output) immediately.
-		flush_interval -1
+	# The public API (/v1, API keys only) on the same address.
+	@api path /v1 /v1/*
+	handle @api {
+		reverse_proxy 127.0.0.1:8788 {
+			flush_interval -1
+		}
 	}
-
-	log {
-		output file /var/log/caddy/codex-console.log
+	handle {
+		reverse_proxy 127.0.0.1:8787 {
+			# Stream server-sent events (live Codex output) immediately.
+			flush_interval -1
+		}
 	}
 }
 
-# Optional: the public API (/v1, API keys only) on its own hostname.
-# In .env: CC_API_ENABLED=true, CC_API_PUBLIC_ORIGIN=https://api.example.com,
-#          CC_API_PROXY_PROTOCOL=off, CC_API_TRUST_PROXY=loopback
+# No domain? A bare public IPv4 address works too: Let's Encrypt issues short-lived
+# (about 6 days) certificates for IP addresses, and Caddy 2.10+ renews them.
 #
-# api.example.com {
-# 	reverse_proxy 127.0.0.1:8788 {
-# 		flush_interval -1
+# 203.0.113.7 {
+# 	tls {
+# 		issuer acme {
+# 			profile shortlived
+# 		}
 # 	}
+# 	...same handlers as above...
 # }

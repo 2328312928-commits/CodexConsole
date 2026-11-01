@@ -4,6 +4,7 @@ import type { FileUpdateChange, ThreadItem, TurnPlanStep, UserInput } from '../.
 import { fileUrl, post } from '../../api';
 import { ErrorAlert, Spinner } from '../../components/ui';
 import { fmtBytes, fmtCompact, fmtDuration, fmtRelative } from '../../format';
+import { useSignedInKey } from '../../auth';
 import { useI18n } from '../../i18n';
 import { Icon } from '../../icons';
 import { renderMarkdown } from '../../markdown';
@@ -548,6 +549,9 @@ export const History = memo(function History({ entries, ctx }: { entries: Transc
 
 export function ApprovalCard({ approval, ctx }: { approval: ApprovalInfo; ctx: ViewContext }) {
   const { t, lang } = useI18n();
+  // A key with caps may only decline: allowing could lift Codex past them.
+  const key = useSignedInKey();
+  const canAllow = !key || key.canAllow;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const decide = async (decision: ApprovalDecision, ruleIndex?: number) => {
@@ -578,22 +582,26 @@ export function ApprovalCard({ approval, ctx }: { approval: ApprovalInfo; ctx: V
       {approval.permissions ? <pre>{JSON.stringify(approval.permissions, null, 2)}</pre> : null}
       {approval.reason ? <div>{t('approval.reason', { reason: approval.reason })}</div> : null}
       <div className="row">
-        <button type="button" className="btn primary" disabled={busy} onClick={() => void decide('accept')}>
-          {t('approval.accept')}
-        </button>
-        <button type="button" className="btn" disabled={busy} onClick={() => void decide('acceptForSession')}>
-          {t('approval.acceptForSession')}
-        </button>
-        {approval.proposedRule ? (
-          <button type="button" className="btn" disabled={busy} onClick={() => void decide('acceptAlways')} title={approval.proposedRule.join(' ')}>
-            {t('approval.acceptAlways', { rule: approval.proposedRule.join(' ') })}
-          </button>
+        {canAllow ? (
+          <>
+            <button type="button" className="btn primary" disabled={busy} onClick={() => void decide('accept')}>
+              {t('approval.accept')}
+            </button>
+            <button type="button" className="btn" disabled={busy} onClick={() => void decide('acceptForSession')}>
+              {t('approval.acceptForSession')}
+            </button>
+            {approval.proposedRule ? (
+              <button type="button" className="btn" disabled={busy} onClick={() => void decide('acceptAlways')} title={approval.proposedRule.join(' ')}>
+                {t('approval.acceptAlways', { rule: approval.proposedRule.join(' ') })}
+              </button>
+            ) : null}
+            {approval.networkRules?.map((r, i) => (
+              <button key={`${r.action}:${r.host}`} type="button" className="btn" disabled={busy} onClick={() => void decide('applyNetworkRule', i)}>
+                {r.action === 'deny' ? t('approval.denyHost', { host: r.host }) : t('approval.allowHost', { host: r.host })}
+              </button>
+            ))}
+          </>
         ) : null}
-        {approval.networkRules?.map((r, i) => (
-          <button key={`${r.action}:${r.host}`} type="button" className="btn" disabled={busy} onClick={() => void decide('applyNetworkRule', i)}>
-            {r.action === 'deny' ? t('approval.denyHost', { host: r.host }) : t('approval.allowHost', { host: r.host })}
-          </button>
-        ))}
         <button type="button" className="btn danger" disabled={busy} onClick={() => void decide('decline')}>
           {t('approval.decline')}
         </button>

@@ -255,7 +255,8 @@ export class SessionOps {
       titleAuto: false,
       cwd: session.cwd,
       deviceId: ctx.deviceId ?? null,
-      apiKeyId: session.api_key_id,
+      // The fork belongs to whoever made it.
+      apiKeyId: ctx.apiKeyId ?? session.api_key_id,
       threadId: res.thread.id,
       settings: this.d.sessions.settingsOf(session),
       forkedFrom: session.id,

@@ -5,8 +5,8 @@
 The public API lets **your own** scripts, tools and devices use the console without a browser: send prompts, wait for or stream the result, manage sessions, move files, answer approvals and manage MCP servers. It is meant for one owner. Don't hand keys to other people: sharing access to your ChatGPT plan is against OpenAI's terms.
 
 - It runs on a **separate listener** (default `127.0.0.1:8788`) that serves only `/v1`. The console UI, `/api` and the admin area are never reachable through it.
-- It is **off** until you set `CC_API_ENABLED=true`. To reach it from the internet, put it behind a TLS tunnel: see [FUNNEL.md](FUNNEL.md).
-- Every call needs an **API key** you create in **Admin → API keys**. Cookies are ignored.
+- On a server set up with [`deploy/deploy.sh`](DEPLOY.md) it is on, at `https://<your address>/v1`. On your own machine it is **off** until you set `CC_API_ENABLED=true`; to reach it from the internet, put it behind a TLS tunnel: see [FUNNEL.md](FUNNEL.md).
+- Every call needs an **API key** with API scopes, created in **Admin → Keys**. Console cookies are ignored.
 
 ## Contents
 
@@ -30,12 +30,13 @@ Authorization: Bearer cck_0123456789abcdef.<43 characters>
 - **Format.** `cck_` + a 16-hex-digit id + `.` + a 256-bit secret. The console stores only an HMAC of the secret, so a key is shown exactly once, when you create or rotate it.
 - **Settings per key.**
   - label, expiry
+  - console sign-in: *Full console*, *Folder only* or *Off*. The same key can sign in to the console in a browser; a key needs console sign-in or at least one scope
   - scopes (below)
   - a token quota per day, per month or in total
   - the most powerful sandbox it may use, whether network access is allowed, and what happens when Codex needs approval
   - rate limits, an optional IP allowlist, and its own workspace folder
-- **Rotate** creates a new secret. The old one can keep working for 0, 1 or 24 hours so you can update your tools.
-- **Revoke** is immediate and permanent. Running prompts of that key are stopped, and open event streams close within 30 seconds.
+- **Rotate** creates a new secret. The old one can keep working for 0, 1 or 24 hours so you can update your tools (for the API only: it signs the key out of the console at once).
+- **Revoke** is immediate and permanent. Running prompts of that key are stopped, and its console sign-ins and open event streams end.
 
 ### Scopes
 
@@ -83,8 +84,8 @@ Limits:
 ## Quick start
 
 ```bash
-export CODEX_CONSOLE_KEY='cck_…'          # from Admin → API keys
-BASE=https://<machine>.<tailnet>.ts.net/v1  # or http://127.0.0.1:8788/v1 on the host
+export CODEX_CONSOLE_KEY='cck_…'          # from Admin → Keys
+BASE=https://console.example.com/v1       # your server; http://127.0.0.1:8788/v1 on the host itself
 AUTH="Authorization: Bearer $CODEX_CONSOLE_KEY"
 
 curl -s "$BASE/me" -H "$AUTH"
@@ -293,7 +294,7 @@ The response is `{ "kind": … }`: `turn` (with `requestId`), `session`, `settin
 
 ## What a key can and cannot do
 
-- **Can't** reach the console UI, `/api/*`, the admin area, other keys' sessions, or files outside its folder.
+- **Through the API, can't** reach the console UI, `/api/*`, the admin area, other keys' sessions, or files outside its folder. (A key with console sign-in can use the console in a browser, within the same caps; the admin area always needs the owner password and an authenticator code.)
 - **Can't** raise its own caps: sandbox, network and approval settings are clamped to what you set on the key.
 - **Can** make Codex *read* files outside its folder. Codex's sandbox limits writes and network access, not reads, so treat a key with `prompt` like shell access to everything your user can read on the host.
-- **Every call is logged:** **Admin → API keys → Usage**, plus the Requests, File transfers and Security log tabs (filter by key).
+- **Every call is logged:** **Admin → Keys → Usage**, plus the Requests, File transfers and Security log tabs (filter by key).

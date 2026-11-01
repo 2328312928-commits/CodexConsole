@@ -1,4 +1,6 @@
-# systemd *user* service for Codex Console (runs as you, so Codex uses your ~/.codex login).
+# systemd *user* service for Codex Console on your own machine (runs as you, so Codex uses
+# your ~/.codex login). For a public server use deploy/deploy.sh instead: it installs a
+# hardened system service under its own user.
 #
 # Install:
 #   mkdir -p ~/.config/systemd/user

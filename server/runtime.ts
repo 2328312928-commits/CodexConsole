@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { ApiKeyStore } from './auth/apiKeys.js';
-import { DeviceStore } from './auth/devices.js';
 import { LoginSessionStore } from './auth/loginSessions.js';
 import { OwnerStore } from './auth/owner.js';
 import { CodexBridge, type BridgeLogger } from './codex/bridge.js';
@@ -22,7 +21,6 @@ import { SessionStore } from './services/sessions.js';
 import { SettingsStore } from './services/settings.js';
 import { Workspace } from './services/workspace.js';
 
-const DAY = 86_400_000;
 
 /** Storage + auth stores only (used by the setup CLI, which must not start Codex). */
 export function openStores(config: AppConfig, warn: (msg: string) => void = console.warn) {
@@ -32,7 +30,6 @@ export function openStores(config: AppConfig, warn: (msg: string) => void = cons
     db,
     secrets,
     owner: new OwnerStore(db, secrets.pepper),
-    devices: new DeviceStore(db, secrets.pepper),
     logins: new LoginSessionStore(db, secrets.pepper, config.sessions),
     keys: new ApiKeyStore(db, secrets.pepper),
     audit: new AuditLog(db),
@@ -104,7 +101,6 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
   const housekeeping = () => {
     stores.audit.prune(settings.get().logRetentionDays);
     stores.logins.purgeExpired();
-    db.run('DELETE FROM pairing_codes WHERE expires_at < ?', Date.now() - DAY);
   };
   housekeeping();
   const timers = [
@@ -119,7 +115,6 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
     config,
     db,
     owner: stores.owner,
-    devices: stores.devices,
     logins: stores.logins,
     keys: stores.keys,
     audit: stores.audit,

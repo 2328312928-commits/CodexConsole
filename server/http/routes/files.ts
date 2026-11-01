@@ -2,8 +2,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ApiError } from '../../lib/errors.js';
 import { isTextLike, mediaKind } from '../../services/workspace.js';
-import type { AppDeps } from '../context.js';
+import { clientIp, type AppDeps } from '../context.js';
 import { contentDisposition, FILE_CSP } from '../headers.js';
+import { ConsoleScope } from '../scope.js';
 
 const HOUR_MS = 3_600_000;
 const sessionIdSchema = z.string().regex(/^ses_[A-Za-z0-9_-]{1,40}$/).optional();
@@ -31,17 +32,22 @@ export function parseRange(header: string | undefined, size: number): ByteRange 
   return { start, end };
 }
 
+/** The console's file browser. A folder key sees its own folder as the root; every path is relative to it. */
 export function registerFileRoutes(app: FastifyInstance, deps: AppDeps): void {
-  const { workspace, audit, config, limiter, media } = deps;
+  const { audit, config, limiter, media } = deps;
+  const scopeOf = (req: FastifyRequest) => ConsoleScope.of(deps, req);
+  /** Path as logged: always workspace-relative, so the logs read the same for every key. */
+  const logPath = (scope: ConsoleScope, rel: string) => (scope.full ? rel : rel ? `${scope.key.folder}/${rel}` : scope.key.folder);
 
   app.get('/api/files', async (req) => {
     const q = pathQuery.parse(req.query);
-    return workspace.list(q.path);
+    return (await scopeOf(req).workspace()).list(q.path);
   });
 
   async function serve(req: FastifyRequest, reply: FastifyReply, mode: 'view' | 'download') {
     const q = pathQuery.parse(req.query);
-    const f = await workspace.openForRead(q.path);
+    const scope = scopeOf(req);
+    const f = await (await scope.workspace()).openForRead(q.path);
     const kind = mediaKind(f.mime);
     let type = 'application/octet-stream';
     let inline = false;
@@ -72,7 +78,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: AppDeps): void {
       .header('Content-Length', String(length));
     if (range) reply.status(206).header('Content-Range', `bytes ${start}-${end}/${f.size}`);
     // Every response is logged, ranged reads included, so nothing leaves the workspace unrecorded.
-    audit.transfer({ deviceId: req.auth.device!.id, sessionId: q.session ?? null, direction: mode, path: f.rel, bytes: length, ok: true });
+    audit.transfer({ deviceId: null, apiKeyId: scope.key.id, sessionId: q.session ?? null, direction: mode, path: logPath(scope, f.rel), bytes: length, ok: true });
     if (f.size === 0) {
       await f.handle.close();
       return reply.send('');
@@ -88,24 +94,29 @@ export function registerFileRoutes(app: FastifyInstance, deps: AppDeps): void {
       .object({ path: z.string().max(4096).default(''), overwrite: z.enum(['0', '1']).optional(), session: sessionIdSchema })
       .parse(req.query);
     if (!req.isMultipart()) throw new ApiError(400, 'bad_request', 'multipart/form-data expected');
-    const deviceId = req.auth.device!.id;
-    const quotaKey = `upload:dev:${deviceId}`;
+    const scope = scopeOf(req);
+    const ws = await scope.workspace();
+    const keyId = scope.key.id;
+    // The key's own hourly allowance, never more than the console-wide one.
+    const quotaKey = `upload:key:${keyId}`;
+    const quota = Math.min(scope.key.limits.uploadMbPerHour * 1024 * 1024, config.limits.uploadBytesPerHour);
     const files: Array<{ path: string; name: string; size: number }> = [];
     for await (const part of req.parts()) {
       if (part.type !== 'file') continue;
-      if (limiter.usage(quotaKey, HOUR_MS) >= config.limits.uploadBytesPerHour) {
+      if (limiter.usage(quotaKey, HOUR_MS) >= quota) {
         part.file.resume();
-        audit.security('rate_limited', { deviceId, ip: req.ip }, { scope: 'upload' });
-        throw new ApiError(429, 'upload_quota_exceeded', undefined, Math.ceil(limiter.retryAfter(quotaKey, config.limits.uploadBytesPerHour, HOUR_MS) / 1000));
+        audit.security('rate_limited', { apiKeyId: keyId, ip: clientIp(req) }, { scope: 'upload' });
+        throw new ApiError(429, 'upload_quota_exceeded', undefined, Math.ceil(limiter.retryAfter(quotaKey, quota, HOUR_MS) / 1000));
       }
       try {
-        const saved = await workspace.upload(q.path, part.filename || 'upload', part.file, config.limits.maxUploadBytes, q.overwrite === '1');
+        const max = Math.min(config.limits.maxUploadBytes, Math.max(1, quota - limiter.usage(quotaKey, HOUR_MS)));
+        const saved = await ws.upload(q.path, part.filename || 'upload', part.file, max, q.overwrite === '1');
         limiter.record(quotaKey, HOUR_MS, saved.size);
-        audit.transfer({ deviceId, sessionId: q.session ?? null, direction: 'upload', path: saved.path, bytes: saved.size, ok: true });
+        audit.transfer({ deviceId: null, apiKeyId: keyId, sessionId: q.session ?? null, direction: 'upload', path: logPath(scope, saved.path), bytes: saved.size, ok: true });
         files.push(saved);
       } catch (err) {
         part.file.resume();
-        audit.transfer({ deviceId, sessionId: q.session ?? null, direction: 'upload', path: `${q.path}/${part.filename}`, bytes: 0, ok: false });
+        audit.transfer({ deviceId: null, apiKeyId: keyId, sessionId: q.session ?? null, direction: 'upload', path: logPath(scope, `${q.path}/${part.filename}`), bytes: 0, ok: false });
         throw err;
       }
     }
@@ -114,18 +125,19 @@ export function registerFileRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   app.post('/api/files/mkdir', async (req) => {
     const { path } = z.object({ path: z.string().min(1).max(4096) }).strict().parse(req.body);
-    return { path: await workspace.mkdir(path) };
+    return { path: await (await scopeOf(req).workspace()).mkdir(path) };
   });
 
   app.post('/api/files/delete', async (req) => {
     const { path } = z.object({ path: z.string().min(1).max(4096) }).strict().parse(req.body);
-    await workspace.remove(path);
+    await (await scopeOf(req).workspace()).remove(path);
     return { ok: true };
   });
 
   // Images Codex viewed or generated outside the workspace (copied into the private store).
   app.get('/api/media/:sessionId/:name', async (req, reply) => {
     const { sessionId, name } = z.object({ sessionId: z.string().max(60), name: z.string().max(120) }).parse(req.params);
+    scopeOf(req).session(sessionId);
     const f = await media.open(sessionId, name);
     return reply
       .header('Content-Type', f.mime)

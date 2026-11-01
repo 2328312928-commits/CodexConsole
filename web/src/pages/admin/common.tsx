@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ApiKeyInfo, DeviceInfo } from '../../../../shared/api.js';
+import type { ApiKeyInfo } from '../../../../shared/api.js';
 import { ApiFailure, get } from '../../api';
 import { useI18n } from '../../i18n';
 import { Icon } from '../../icons';
@@ -60,17 +60,14 @@ export function Pager({ offset, limit, total, onChange }: { offset: number; limi
   );
 }
 
-/** "d:<id>" / "k:<id>" → the query parameters the admin log endpoints take. */
-export function sourceParams(source: string): { device?: string; key?: string } {
-  if (source.startsWith('d:')) return { device: source.slice(2) };
-  if (source.startsWith('k:')) return { key: source.slice(2) };
-  return {};
+/** "k:<id>" → the query parameters the admin log endpoints take. */
+export function sourceParams(source: string): { key?: string } {
+  return source.startsWith('k:') ? { key: source.slice(2) } : {};
 }
 
-/** One filter for "which device or API key did this". */
-export function SourceFilter({ id, value, onChange, onAdminLost, devices = true }: { id: string; value: string; onChange: (v: string) => void; onAdminLost: () => void; devices?: boolean }) {
+/** One filter for "which key did this". */
+export function SourceFilter({ id, value, onChange, onAdminLost }: { id: string; value: string; onChange: (v: string) => void; onAdminLost: () => void }) {
   const { t } = useI18n();
-  const devs = useAdminData<{ devices: DeviceInfo[] }>(devices ? '/api/admin/devices' : '', onAdminLost);
   const keys = useAdminData<{ keys: ApiKeyInfo[] }>('/api/admin/api-keys', onAdminLost);
   return (
     <>
@@ -79,30 +76,17 @@ export function SourceFilter({ id, value, onChange, onAdminLost, devices = true 
       </label>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{t('requests.filterSource')}</option>
-        {devices && devs.data?.devices.length ? (
-          <optgroup label={t('adminTab.devices')}>
-            {devs.data.devices.map((d) => (
-              <option key={d.id} value={`d:${d.id}`}>
-                {d.name}
-              </option>
-            ))}
-          </optgroup>
-        ) : null}
-        {keys.data?.keys.length ? (
-          <optgroup label={t('adminTab.keys')}>
-            {keys.data.keys.map((k) => (
-              <option key={k.id} value={`k:${k.id}`}>
-                {k.label}
-              </option>
-            ))}
-          </optgroup>
-        ) : null}
+        {keys.data?.keys.map((k) => (
+          <option key={k.id} value={`k:${k.id}`}>
+            {k.label}
+          </option>
+        ))}
       </select>
     </>
   );
 }
 
-/** Who made a request: a paired device or an API key. */
+/** Who made a request: an API key (or, in older log rows, a paired device). */
 export function ViaCell({ deviceName, apiKeyLabel }: { deviceName: string | null; apiKeyLabel: string | null }) {
   if (apiKeyLabel) {
     return (

@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { totpCode } from '../server/auth/totp.js';
-import { Client, HOST, makeHarness, multipart, pairAndLogin, waitForEvent, type Harness } from './helpers.js';
+import { Client, HOST, issueConsoleKey, makeHarness, markAdmin, multipart, signIn, waitForEvent, type Harness } from './helpers.js';
 
 let h: Harness;
 let client: Client;
 
 beforeAll(async () => {
   h = await makeHarness();
-  client = await pairAndLogin(h);
+  client = await signIn(h);
 });
 afterAll(async () => {
   await h?.close();
@@ -27,16 +27,32 @@ describe('access control', () => {
     expect(res.statusCode).toBe(421);
   });
 
-  it('requires a paired device, then a login', async () => {
+  it('signs in with nothing but an API key; admin needs the password and a code on top', async () => {
     const anon = new Client(h.app);
-    expect((await anon.get('/api/sessions')).json().error.code).toBe('device_required');
-    const { code } = h.runtime.devices.create('Second', null);
-    expect((await anon.post('/api/auth/pair', { code: 'AAAAA-BBBBB-CCCCC-DDDDD' })).json().error.code).toBe('invalid_pairing_code');
-    expect((await anon.post('/api/auth/pair', { code: code.toLowerCase() })).statusCode).toBe(200);
-    expect((await anon.post('/api/auth/pair', { code })).json().error.code).toBe('invalid_pairing_code'); // single use
     expect((await anon.get('/api/sessions')).json().error.code).toBe('login_required');
-    const state = (await anon.get('/api/auth/state')).json();
-    expect(state).toMatchObject({ setupComplete: true, loggedIn: false, device: { name: 'Second' } });
+    expect((await anon.post('/api/auth/key', { key: 'cck_0123456789abcdef.not-a-real-secret' })).json().error.code).toBe('invalid_api_key');
+    const { key, secret } = issueConsoleKey(h, 'Phone');
+    const signedIn = await anon.post('/api/auth/key', { key: secret });
+    expect(signedIn.statusCode).toBe(200);
+    expect(signedIn.json()).toMatchObject({ setupComplete: true, loggedIn: true, admin: false, key: { id: key.id, label: 'Phone', access: 'full', canAllow: true } });
+    expect((await anon.get('/api/sessions')).statusCode).toBe(200);
+    // The key alone never opens the admin area.
+    expect((await anon.get('/api/admin/overview')).json().error.code).toBe('admin_required');
+    const code = totpCode(h.totpSecret, Date.now());
+    expect((await anon.post('/api/auth/admin', { password: 'wrong password!!', code })).json().error.code).toBe('invalid_credentials');
+    const unlocked = await anon.post('/api/auth/admin', { password: h.password, code });
+    expect(unlocked.json()).toMatchObject({ admin: true });
+    expect((await anon.get('/api/admin/overview')).statusCode).toBe(200);
+    // A code works once.
+    await anon.post('/api/auth/admin/lock');
+    expect((await anon.post('/api/auth/admin', { password: h.password, code })).json().error.code).toBe('invalid_credentials');
+    h.runtime.limiter.reset('admin:ip:127.0.0.1');
+    h.runtime.limiter.reset('admin:all');
+    // Signing out ends the sign-in on the server too.
+    const cookie = [...anon.cookies.values()][0]!;
+    await anon.post('/api/auth/logout');
+    const replay = await h.app.inject({ method: 'GET', url: '/api/sessions', headers: { host: HOST, cookie: `ccsess=${cookie}` } });
+    expect(replay.json().error.code).toBe('login_required');
   });
 
   it('cannot be bypassed with percent-encoded or odd /api paths', async () => {
@@ -48,7 +64,7 @@ describe('access control', () => {
       ['GET', '/a%70i/sessions'],
       ['GET', '/ap%69/admin/overview'],
       ['GET', `/%61pi/files/view?path=${encodeURIComponent(`${s.workspacePath}/secret.txt`)}`],
-      ['POST', '/%61pi/admin/devices', { name: 'evil' }],
+      ['POST', '/%61pi/admin/api-keys', { label: 'evil' }],
       ['POST', '/%61pi/files/delete', { path: s.workspacePath }],
       ['GET', '/%2561pi/sessions'],
       ['GET', '/API/sessions'],
@@ -62,10 +78,10 @@ describe('access control', () => {
       expect(res.statusCode, `${method} ${url}`).toBeGreaterThanOrEqual(400);
       expect(res.body, `${method} ${url}`).not.toContain('top secret');
       expect(res.body, `${method} ${url}`).not.toContain('"sessions"');
-      expect(res.body, `${method} ${url}`).not.toContain('pairUrl');
+      expect(res.body, `${method} ${url}`).not.toContain('cck_');
     }
     expect(fs.existsSync(s.cwd)).toBe(true);
-    expect(h.runtime.devices.list().some((d) => d.name === 'evil')).toBe(false);
+    expect(h.runtime.keys.list().some((k) => k.label === 'evil')).toBe(false);
   });
 
   it('rejects state-changing requests without the CSRF header or from another origin', async () => {
@@ -75,20 +91,44 @@ describe('access control', () => {
     expect(badOrigin.json().error.code).toBe('forbidden_origin');
   });
 
-  it('locks login after repeated failures and never says which factor was wrong', async () => {
-    const c = new Client(h.app);
-    const { code } = h.runtime.devices.create('Brute', null);
-    await c.post('/api/auth/pair', { code });
+  it('locks the admin unlock after repeated failures and never says which factor was wrong', async () => {
+    const c = await signIn(h, new Client(h.app, '1.2.3.4'), { admin: false });
     for (let i = 0; i < 5; i++) {
-      const r = await c.req('POST', '/api/auth/login', { body: { password: 'wrong password!!', code: '000000' }, headers: { 'x-forwarded-for': '1.2.3.4' } });
+      const r = await c.post('/api/auth/admin', { password: 'wrong password!!', code: '000000' });
       expect(r.json().error.code).toBe('invalid_credentials');
     }
-    const locked = await c.post('/api/auth/login', { password: h.password, code: totpCode(h.totpSecret, Date.now()) });
+    const locked = await c.post('/api/auth/admin', { password: h.password, code: totpCode(h.totpSecret, Date.now()) });
     expect(locked.statusCode).toBe(429);
     expect(locked.json().error.code).toBe('login_locked');
     expect(locked.headers['retry-after']).toBeDefined();
-    h.runtime.limiter.reset('login:ip:127.0.0.1');
-    h.runtime.limiter.reset('login:all');
+    h.runtime.limiter.reset('admin:ip:1.2.3.4');
+    h.runtime.limiter.reset('admin:all');
+  });
+
+  it('locks key sign-in per address only, so nobody can lock the owner out from elsewhere', async () => {
+    const attacker = new Client(h.app, '198.51.100.9');
+    for (let i = 0; i < 10; i++) {
+      const r = await attacker.post('/api/auth/key', { key: `cck_${'0'.repeat(16)}.${'x'.repeat(43)}` });
+      expect(r.json().error.code).toBe('invalid_api_key');
+    }
+    const { secret } = issueConsoleKey(h, 'Locked out?');
+    const locked = await attacker.post('/api/auth/key', { key: secret });
+    expect(locked.statusCode).toBe(429);
+    expect(locked.json().error.code).toBe('login_locked');
+    // The same valid key still works from another address.
+    expect((await new Client(h.app, '203.0.113.20').post('/api/auth/key', { key: secret })).statusCode).toBe(200);
+    const failures = (await client.get('/api/admin/security?kind=login_failure')).json();
+    expect(failures.rows[0]).toMatchObject({ ip: '198.51.100.9' });
+  });
+
+  it('during a flood of failures, locks an address after one failure but lets a valid key from a clean address in', async () => {
+    for (let i = 0; i < 100; i++) h.runtime.limiter.record('key:all', 15 * 60_000);
+    const { secret } = issueConsoleKey(h, 'Flood test');
+    const mistyped = new Client(h.app, '198.51.100.20');
+    expect((await mistyped.post('/api/auth/key', { key: secret.slice(0, -2) + 'xx' })).json().error.code).toBe('invalid_api_key');
+    expect((await mistyped.post('/api/auth/key', { key: secret })).json().error.code).toBe('login_locked');
+    expect((await new Client(h.app, '203.0.113.30').post('/api/auth/key', { key: secret })).statusCode).toBe(200);
+    h.runtime.limiter.reset('key:all');
   });
 
   it('sets hardened headers', async () => {
@@ -96,9 +136,7 @@ describe('access control', () => {
     expect(res.headers['content-security-policy']).toContain("default-src 'self'");
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['cache-control']).toBe('no-store');
-    const cookie = [...client.cookies.keys()];
-    expect(cookie).toContain('ccdev');
-    expect(cookie).toContain('ccsess');
+    expect([...client.cookies.keys()]).toEqual(['ccsess']);
   });
 });
 
@@ -120,7 +158,7 @@ describe('sessions and turns', () => {
     expect(agent.data.item.text).toContain('Hello Codex');
 
     const reqs = (await client.get(`/api/admin/requests?session=${s.id}`)).json();
-    expect(reqs.rows[0]).toMatchObject({ status: 'completed', promptChars: 11, inputTokens: 1200, outputTokens: 600, deviceName: 'Test device' });
+    expect(reqs.rows[0]).toMatchObject({ status: 'completed', promptChars: 11, inputTokens: 1200, outputTokens: 600, apiKeyLabel: 'Test device', deviceName: null });
     expect(reqs.rows[0].durationMs).toBeGreaterThanOrEqual(0);
   });
 
@@ -208,7 +246,7 @@ describe('sessions and turns', () => {
   it('refuses prompts when Codex is signed out', async () => {
     const signedOut = await makeHarness({ signedIn: false });
     try {
-      const c = await pairAndLogin(signedOut);
+      const c = await signIn(signedOut);
       const s = (await c.post('/api/sessions', {})).json().session;
       const res = await c.post(`/api/sessions/${s.id}/turns`, { text: 'hi' });
       expect(res.json().error.code).toBe('codex_not_signed_in');
@@ -223,7 +261,7 @@ describe('sessions and turns', () => {
   it('imports a thread started elsewhere', async () => {
     const seeded = await makeHarness({ fakeEnv: { FAKE_CODEX_SEED: '1' } });
     try {
-      const c = await pairAndLogin(seeded);
+      const c = await signIn(seeded);
       const list = (await c.get('/api/codex/threads')).json();
       expect(list.threads).toHaveLength(1);
       const imported = (await c.post('/api/sessions/import', { threadId: list.threads[0].id })).json();
@@ -276,7 +314,7 @@ describe('files', () => {
   it('rejects uploads over the size limit', async () => {
     const small = await makeHarness({ env: { CC_MAX_UPLOAD_MB: '1' } });
     try {
-      const c = await pairAndLogin(small);
+      const c = await signIn(small);
       const res = await c.req('POST', '/api/files/upload?path=big', multipart([{ name: 'big.bin', content: Buffer.alloc(1024 * 1024 + 10) }]));
       expect(res.statusCode).toBe(413);
       expect(fs.readdirSync(path.join(small.workspace, 'big'))).toEqual([]);
@@ -287,35 +325,37 @@ describe('files', () => {
 });
 
 describe('admin', () => {
-  it('requires a fresh TOTP after locking', async () => {
+  it('asks for the password and a fresh code again after locking', async () => {
     expect((await client.post('/api/auth/admin/lock')).statusCode).toBe(200);
     expect((await client.get('/api/admin/overview')).json().error.code).toBe('admin_required');
-    expect((await client.post('/api/auth/admin/verify', { code: '123456' })).json().error.code).toBe('invalid_totp');
+    expect((await client.post('/api/auth/admin', { password: h.password, code: '123456' })).json().error.code).toBe('invalid_credentials');
     const next = totpCode(h.totpSecret, Date.now() + 30_000);
-    expect((await client.post('/api/auth/admin/verify', { code: next })).statusCode).toBe(200);
-    expect((await client.post('/api/auth/admin/verify', { code: next })).json().error.code).toBe('invalid_totp'); // no replay
+    expect((await client.post('/api/auth/admin', { password: h.password, code: next })).statusCode).toBe(200);
+    await client.post('/api/auth/admin/lock');
+    expect((await client.post('/api/auth/admin', { password: h.password, code: next })).json().error.code).toBe('invalid_credentials'); // no replay
+    h.runtime.limiter.reset('admin:ip:127.0.0.1');
+    h.runtime.limiter.reset('admin:all');
+    markAdmin(h, client);
     const overview = (await client.get('/api/admin/overview?tz=-600')).json();
     expect(overview.codex).toMatchObject({ state: 'ready', signedIn: true, account: { type: 'chatgpt', planType: 'plus', email: 'owner@example.com' } });
     expect(overview.codex.rateLimits.primary.windowDurationMins).toBe(300);
     expect(overview.daily).toHaveLength(14);
     expect(overview.totals.requests24h).toBeGreaterThan(0);
+    expect(overview.totals.activeSignIns).toBeGreaterThan(0);
   });
 
-  it('manages devices: pairing QR, usage, revoke', async () => {
-    const created = (await client.post('/api/admin/devices', { name: 'Phone', expiresInDays: 30 })).json();
-    expect(created.qrSvg).toContain('<svg');
-    expect(created.pairUrl).toBe(`http://${HOST}/pair#code=${encodeURIComponent(created.code)}`);
-    const phone = new Client(h.app);
-    await phone.post('/api/auth/pair', { code: created.code });
-    await phone.post('/api/auth/login', { password: h.password, code: totpCode(h.totpSecret, Date.now() - 30_000) });
-    const devices = (await client.get('/api/admin/devices')).json().devices;
-    expect(devices.find((d: { id: string }) => d.id === created.device.id)).toMatchObject({ status: 'active', tokenHint: expect.stringMatching(/^ccd_/) });
-    const me = devices.find((d: { name: string }) => d.name === 'Test device');
-    expect(me.usage.requests).toBeGreaterThan(0);
-    await client.post(`/api/admin/devices/${created.device.id}/revoke`);
-    expect((await phone.get('/api/sessions')).json().error.code).toBe('device_required');
-    const sec = (await client.get('/api/admin/security?kind=device_revoked')).json();
-    expect(sec.total).toBe(1);
+  it('lists who is signed in and can end a sign-in', async () => {
+    const { key, secret } = issueConsoleKey(h, 'Tablet');
+    const tablet = new Client(h.app, '203.0.113.5');
+    await tablet.post('/api/auth/key', { key: secret });
+    const logins = (await client.get(`/api/admin/logins?key=${key.id}`)).json().logins;
+    expect(logins).toHaveLength(1);
+    expect(logins[0]).toMatchObject({ apiKeyId: key.id, apiKeyLabel: 'Tablet', ip: '203.0.113.5', admin: false, current: false });
+    const keys = (await client.get('/api/admin/api-keys')).json().keys;
+    expect(keys.find((k: { id: string }) => k.id === key.id)).toMatchObject({ consoleAccess: 'full', signIns: 1 });
+    await client.post(`/api/admin/logins/${logins[0].id}/revoke`);
+    expect((await tablet.get('/api/sessions')).json().error.code).toBe('login_required');
+    expect((await client.get('/api/admin/security?kind=login_session_revoked')).json().total).toBe(1);
   });
 
   it('exports requests as CSV with formula injection neutralised', async () => {
@@ -328,9 +368,9 @@ describe('admin', () => {
     expect(csv.body).toContain(`"'=HYPERLINK(""x"")"`);
   });
 
-  it('logs every API call per device', async () => {
+  it('logs every API call per key', async () => {
     const log = (await client.get('/api/admin/api-log?limit=5')).json();
     expect(log.total).toBeGreaterThan(10);
-    expect(log.rows[0]).toMatchObject({ deviceName: 'Test device', method: expect.any(String), route: expect.stringMatching(/^\/api\//) });
+    expect(log.rows[0]).toMatchObject({ apiKeyId: expect.stringMatching(/^[0-9a-f]{16}$/), deviceName: null, method: expect.any(String), route: expect.stringMatching(/^\/api\//) });
   });
 });

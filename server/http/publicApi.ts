@@ -4,7 +4,7 @@ import path from 'node:path';
 import Fastify, { LogController, type FastifyInstance, type FastifyReply, type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import { z } from 'zod';
 import { SAFE_APPROVAL_DECISIONS, type ApiKeyScope, type MediaRef, type ServerEvent, type TurnResult } from '../../shared/api.js';
-import type { ApiKey, ApiKeyAuth } from '../auth/apiKeys.js';
+import { promptBucket, type ApiKey, type ApiKeyAuth } from '../auth/apiKeys.js';
 import { runCommand } from '../codex/commands.js';
 import type { KeyCaps } from '../codex/sessionOps.js';
 import type { KeyContext } from '../codex/turns.js';
@@ -345,7 +345,7 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
       .parse(req.body);
     if (!body.text.trim() && body.files.length + body.mentions.length + body.skills.length + body.imageUrls.length === 0) throw new ApiError(400, 'prompt_empty');
     if ([...body.text].length > config.limits.maxPromptChars) throw new ApiError(413, 'prompt_too_long');
-    const limited = limiter.consume(`apikey:prompt:${k.id}`, k.limits.promptsPerMinute, 60_000);
+    const limited = limiter.consume(promptBucket(k), k.limits.promptsPerMinute, 60_000);
     if (!limited.ok) {
       requests.start({
         sessionId: s.id,
@@ -423,9 +423,12 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
     if (!body.text.trim() && body.files.length + body.mentions.length + body.skills.length + body.imageUrls.length === 0) throw new ApiError(400, 'prompt_empty');
     if ([...body.text].length > config.limits.maxPromptChars) throw new ApiError(413, 'prompt_too_long');
     if (body.imageUrls.length > 0 && !k.allowNetwork) throw new ApiError(403, 'setting_not_allowed', 'image links need network access, which this key does not allow');
+    // Queued prompts count against the same per-minute budget as prompts sent now.
+    const limited = limiter.consume(promptBucket(k), k.limits.promptsPerMinute, 60_000);
+    if (!limited.ok) throw new ApiError(429, 'rate_limited', undefined, Math.ceil(limited.retryAfterMs / 1000));
     const { attachments, extra } = await buildPromptInput(await keyWorkspace(k), { attachments: body.files, mentions: body.mentions, imageUrls: body.imageUrls });
     extra.push(...(await ops.skillInputs(s.cwd, body.skills)));
-    return { queued: queue.add(s.id, { text: body.text, attachments, extraInput: extra, keyId: k.id, ctx: evCtx(req) }) };
+    return { queued: queue.add(s.id, { text: body.text, attachments, extraInput: extra, keyId: k.id, channel: 'api', ctx: evCtx(req) }) };
   });
   app.delete('/v1/sessions/:id/queue/:itemId', { config: { scope: 'prompt' } }, async (req) => {
     const { id, itemId } = z.object({ id: idParam.shape.id, itemId: z.string().max(100) }).parse(req.params);

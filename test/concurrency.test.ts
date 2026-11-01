@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ServerEvent } from '../shared/api.js';
-import { makeHarness, pairAndLogin, waitForEvent, type Client, type Harness } from './helpers.js';
+import { makeHarness, signIn, waitForEvent, type Client, type Harness } from './helpers.js';
 
 let h: Harness;
 let client: Client;
 beforeAll(async () => {
   h = await makeHarness();
-  client = await pairAndLogin(h);
+  client = await signIn(h);
 });
 afterAll(async () => {
   await h?.close();

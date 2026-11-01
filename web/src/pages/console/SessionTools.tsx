@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import type { BackgroundTerminal, CommandResult, EffectiveSettings, ModelInfo, ReviewTarget, SessionInfo, SessionSettings, SessionStatus, SkillInfo, ThreadGoal } from '../../../../shared/api.js';
 import { del, get, patch, post, qs } from '../../api';
+import { keyCapped, sandboxAllowed, useSignedInKey } from '../../auth';
 import { ErrorAlert, InfoTip, Modal, Spinner } from '../../components/ui';
 import { fmtCompact, fmtDuration } from '../../format';
 import type { MessageKey } from '../../../../shared/i18n/index.js';
@@ -28,6 +29,11 @@ function Choice<T extends string | boolean>({ value, options, onChange, label }:
 /** How Codex may work in this session: permissions, reviewer, network, web search, folders, memory. */
 export function SettingsDialog({ session, onClose, onSaved }: { session: SessionInfo; models?: ModelInfo[]; onClose: () => void; onSaved: (s: SessionInfo) => void }) {
   const { t } = useI18n();
+  // Only offer what the signed-in key may choose; the server enforces the same caps.
+  const key = useSignedInKey();
+  const capped = keyCapped(key);
+  const network = !key || key.allowNetwork;
+  const extraFolders = !key || (key.access === 'full' && key.maxSandbox === 'danger-full-access');
   const [form, setForm] = useState<SessionSettings>(session.settings);
   const [roots, setRoots] = useState((session.settings.writableRoots ?? []).join('\n'));
   const [effective, setEffective] = useState<EffectiveSettings | null>(null);
@@ -66,7 +72,7 @@ export function SettingsDialog({ session, onClose, onSaved }: { session: Session
             label={t('settings.sandbox')}
             value={form.sandbox}
             onChange={(v) => set({ sandbox: v })}
-            options={[def(effective ? t(`sandbox.${effective.sandbox}`) : ''), ...SANDBOXES.map((x) => ({ value: x, label: t(`sandbox.${x}`) }))]}
+            options={[def(effective ? t(`sandbox.${effective.sandbox}`) : ''), ...SANDBOXES.filter((x) => sandboxAllowed(key, x)).map((x) => ({ value: x, label: t(`sandbox.${x}`) }))]}
           />
           {form.sandbox === 'danger-full-access' ? (
             <span className="hint danger-text">
@@ -80,7 +86,7 @@ export function SettingsDialog({ session, onClose, onSaved }: { session: Session
             label={t('settings.approvalPolicy')}
             value={form.approvalPolicy}
             onChange={(v) => set({ approvalPolicy: v })}
-            options={[def(''), ...APPROVALS.map((x) => ({ value: x, label: t(`approvalPolicy.${x}`) }))]}
+            options={[def(''), ...APPROVALS.filter((x) => key?.approvals !== 'deny' || x === 'never').map((x) => ({ value: x, label: t(`approvalPolicy.${x}`) }))]}
           />
         </div>
         <div className="setting-row">
@@ -89,7 +95,7 @@ export function SettingsDialog({ session, onClose, onSaved }: { session: Session
             label={t('settings.reviewer')}
             value={form.approvalsReviewer}
             onChange={(v) => set({ approvalsReviewer: v })}
-            options={[def(''), { value: 'user', label: t('reviewer.user') }, { value: 'auto_review', label: t('reviewer.auto'), title: t('reviewer.autoHint') }]}
+            options={[def(''), { value: 'user', label: t('reviewer.user') }, ...(capped ? [] : [{ value: 'auto_review' as const, label: t('reviewer.auto'), title: t('reviewer.autoHint') }])]}
           />
         </div>
         <div className="setting-row">
@@ -98,7 +104,7 @@ export function SettingsDialog({ session, onClose, onSaved }: { session: Session
             label={t('settings.network')}
             value={form.networkAccess}
             onChange={(v) => set({ networkAccess: v })}
-            options={[def(''), { value: true, label: t('common.on') }, { value: false, label: t('common.off') }]}
+            options={[def(''), ...(network ? [{ value: true, label: t('common.on') }] : []), { value: false, label: t('common.off') }]}
           />
         </div>
         <div className="setting-row">
@@ -107,7 +113,7 @@ export function SettingsDialog({ session, onClose, onSaved }: { session: Session
             label={t('settings.webSearch')}
             value={form.webSearch}
             onChange={(v) => set({ webSearch: v })}
-            options={[def(''), ...(['disabled', 'cached', 'live'] as const).map((x) => ({ value: x, label: t(`webSearch.${x}`) }))]}
+            options={[def(''), ...(['disabled', 'cached', 'live'] as const).filter((x) => network || x === 'disabled').map((x) => ({ value: x, label: t(`webSearch.${x}`) }))]}
           />
         </div>
         <div className="setting-row">
@@ -119,12 +125,14 @@ export function SettingsDialog({ session, onClose, onSaved }: { session: Session
             options={[def(''), { value: true, label: t('common.on') }, { value: false, label: t('common.off') }]}
           />
         </div>
-        <div className="field">
-          <label htmlFor="st-roots">
-            {t('settings.writableRoots')} <InfoTip text={t('settings.writableRootsHint')} />
-          </label>
-          <textarea id="st-roots" className="mono" rows={2} value={roots} onChange={(e) => setRoots(e.target.value)} spellCheck={false} placeholder={t('settings.writableRootsPlaceholder')} />
-        </div>
+        {extraFolders ? (
+          <div className="field">
+            <label htmlFor="st-roots">
+              {t('settings.writableRoots')} <InfoTip text={t('settings.writableRootsHint')} />
+            </label>
+            <textarea id="st-roots" className="mono" rows={2} value={roots} onChange={(e) => setRoots(e.target.value)} spellCheck={false} placeholder={t('settings.writableRootsPlaceholder')} />
+          </div>
+        ) : null}
         <ErrorAlert error={error} />
         <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>
           <button type="button" className="btn" onClick={onClose}>

@@ -2,7 +2,7 @@
 
 [中文版](FEATURES.zh-CN.md)
 
-What Codex CLI 0.164.0 offers (its CLI, TUI slash commands and app-server protocol) and where each part lives in the console. **Console** = web UI, **API** = public `/v1` API with keys, **Admin** = admin area (fresh TOTP). `npm run codex:check` verifies every protocol method the console uses against the installed Codex.
+What Codex CLI 0.164.0 offers (its CLI, TUI slash commands and app-server protocol) and where each part lives in the console. **Console** = web UI (signed in with an API key), **API** = public `/v1` API with keys, **Admin** = admin area (owner password + authenticator code). A key's caps on sandbox, network and approvals hold in the console as well as in the API; a key with full access and network has nothing left to cap. `npm run codex:check` verifies every protocol method the console uses against the installed Codex.
 
 ✅ supported · ⚠️ supported with a limit (see note) · — not applicable
 
@@ -41,11 +41,11 @@ What Codex CLI 0.164.0 offers (its CLI, TUI slash commands and app-server protoc
 | --- | --- | --- | --- |
 | Sandbox: read-only, workspace-write, full access (`-s`, `/permissions`) | ✅ | ✅ | Keys are capped |
 | Approval policy: untrusted, on-request, never (`-a`) | ✅ | ✅ | |
-| Approve once / for the session / always for similar commands | ✅ | ⚠️ | Keys can only decline unless they have full access and network |
+| Approve once / for the session / always for similar commands | ✅ | ⚠️ | A key can only decline unless it has full access and network (console and API) |
 | Network rules (allow / block a host) | ✅ | ⚠️ | Same rule |
 | Permission requests (extra network or file access) | ✅ | ⚠️ | Same rule |
 | Stop the turn from an approval (cancel) | ✅ | ✅ | |
-| Automatic reviewer (`--approve-for-me`, auto-review) | ✅ | — | Never for keys; denials can be allowed once ⚠️ verified with the fake Codex only |
+| Automatic reviewer (`--approve-for-me`, auto-review) | ✅ | — | Only for keys with nothing capped; denials can be allowed once ⚠️ verified with the fake Codex only |
 | Network access in the sandbox | ✅ | ✅ | Keys are capped |
 | Extra writable folders (`--add-dir`) | ✅ | — | Inside the workspace |
 | Web search (`--search`, `web_search`) | ✅ | ✅ | Off for keys without network |

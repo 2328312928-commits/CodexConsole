@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
-import type { ApiKeyLimits, ApiKeyScope, ApiKeyStatus, KeyApprovals, QuotaPeriod } from '../../shared/api.js';
+import type { ApiKeyLimits, ApiKeyScope, ApiKeyStatus, ConsoleAccess, KeyApprovals, QuotaPeriod } from '../../shared/api.js';
 import type { SandboxMode } from '../../shared/codex.js';
+import type { KeyCaps } from '../codex/sessionOps.js';
 import type { Db } from '../db/db.js';
 import { hmacHex, safeEqual } from '../lib/crypto.js';
+import { buildAllowlist, ipAllowed } from '../lib/net.js';
 
 export const API_KEY_PREFIX = 'cck_';
 const KEY_RE = /^cck_([0-9a-f]{16})\.([A-Za-z0-9_-]{43})$/;
@@ -20,6 +22,7 @@ interface ApiKeyRow {
   prev_secret_hash: string | null;
   prev_valid_until: number | null;
   scopes: string;
+  console_access: string;
   folder: string;
   quota_tokens: number | null;
   quota_period: string;
@@ -45,6 +48,7 @@ export interface ApiKey {
   label: string;
   hint: string;
   scopes: Set<ApiKeyScope>;
+  consoleAccess: ConsoleAccess;
   folder: string;
   quotaTokens: number | null;
   quotaPeriod: QuotaPeriod;
@@ -66,6 +70,7 @@ export interface ApiKey {
 export interface ApiKeySettings {
   label: string;
   scopes: ApiKeyScope[];
+  consoleAccess: ConsoleAccess;
   quotaTokens: number | null;
   quotaPeriod: QuotaPeriod;
   maxSandbox: SandboxMode;
@@ -74,6 +79,42 @@ export interface ApiKeySettings {
   limits: ApiKeyLimits;
   ipAllowlist: string[];
   expiresAt: number | null;
+}
+
+/** The rate-limit bucket for a key's prompts, shared by the console, the queue and the public API. */
+export function promptBucket(key: Pick<ApiKey, 'id'>): string {
+  return `apikey:prompt:${key.id}`;
+}
+
+/** A key with full access and network has nothing left to cap: it may allow any approval. */
+export function keyCanAllow(key: Pick<ApiKey, 'maxSandbox' | 'allowNetwork'>): boolean {
+  return key.maxSandbox === 'danger-full-access' && key.allowNetwork;
+}
+
+/**
+ * The caps a key's turns run under. In the console a key with nothing left to cap works like
+ * the owner (null: no caps, so the automatic reviewer is available); the API always caps.
+ */
+export function keyCaps(key: ApiKey, inConsole: boolean): KeyCaps | null {
+  if (inConsole && keyCanAllow(key) && key.approvals === 'ask') return null;
+  return { maxSandbox: key.maxSandbox, allowNetwork: key.allowNetwork, approvals: key.approvals };
+}
+
+/** A key for one of your own devices: the whole console (never admin), no quota, no expiry. */
+export function consoleKeySettings(label: string): ApiKeySettings {
+  return {
+    label: label.slice(0, 60),
+    scopes: [],
+    consoleAccess: 'full',
+    quotaTokens: null,
+    quotaPeriod: 'month',
+    maxSandbox: 'danger-full-access',
+    allowNetwork: true,
+    approvals: 'ask',
+    limits: { perMinute: 600, promptsPerMinute: 20, concurrent: 4, uploadMbPerHour: 2048 },
+    ipAllowlist: [],
+    expiresAt: null,
+  };
 }
 
 export type ApiKeyAuth =
@@ -86,6 +127,7 @@ function fromRow(r: ApiKeyRow, now = Date.now()): ApiKey {
     label: r.label,
     hint: r.secret_hint,
     scopes: new Set(JSON.parse(r.scopes) as ApiKeyScope[]),
+    consoleAccess: r.console_access === 'full' || r.console_access === 'folder' ? r.console_access : 'none',
     folder: r.folder,
     quotaTokens: r.quota_tokens,
     quotaPeriod: r.quota_period as QuotaPeriod,
@@ -127,8 +169,8 @@ export function quotaWindow(period: QuotaPeriod, now = Date.now()): { start: num
 }
 
 /**
- * Public-API keys. A key is `cck_<id>.<secret>`: the id locates the row, the 256-bit
- * secret is only ever stored as HMAC-SHA256 with the server pepper.
+ * API keys: for signing in to the console and for the public API. A key is `cck_<id>.<secret>`:
+ * the id locates the row, the 256-bit secret is only ever stored as HMAC-SHA256 with the server pepper.
  */
 export class ApiKeyStore {
   constructor(
@@ -159,18 +201,28 @@ export class ApiKeyStore {
     return 'active';
   }
 
+  /** Why this key may not use the console from `ip` right now, or null if it may. */
+  consoleProblem(key: ApiKey, ip: string, now = Date.now()): 'api_key_revoked' | 'api_key_expired' | 'console_not_allowed' | 'ip_not_allowed' | null {
+    const status = this.status(key, now);
+    if (status !== 'active') return status === 'revoked' ? 'api_key_revoked' : 'api_key_expired';
+    if (key.consoleAccess === 'none') return 'console_not_allowed';
+    if (!ipAllowed(buildAllowlist(key.ipAllowlist), ip)) return 'ip_not_allowed';
+    return null;
+  }
+
   create(settings: ApiKeySettings, folder: string, now = Date.now()): { key: ApiKey; secret: string } {
     const id = crypto.randomBytes(8).toString('hex');
     const secret = crypto.randomBytes(32).toString('base64url');
     this.db.run(
-      `INSERT INTO api_keys (id, label, secret_hash, secret_hint, scopes, folder, quota_tokens, quota_period, max_sandbox, allow_network,
+      `INSERT INTO api_keys (id, label, secret_hash, secret_hint, scopes, console_access, folder, quota_tokens, quota_period, max_sandbox, allow_network,
          approvals, rate_per_min, prompts_per_min, max_concurrent, upload_mb_per_hour, ip_allowlist, created_at, updated_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       settings.label,
       this.hash(secret),
       secret.slice(-4),
       JSON.stringify([...new Set(settings.scopes)]),
+      settings.consoleAccess,
       folder,
       settings.quotaTokens,
       settings.quotaPeriod,
@@ -195,6 +247,7 @@ export class ApiKeyStore {
     const next: ApiKeySettings = {
       label: s.label ?? cur.label,
       scopes: s.scopes ?? [...cur.scopes],
+      consoleAccess: s.consoleAccess ?? cur.consoleAccess,
       quotaTokens: s.quotaTokens === undefined ? cur.quotaTokens : s.quotaTokens,
       quotaPeriod: s.quotaPeriod ?? cur.quotaPeriod,
       maxSandbox: s.maxSandbox ?? cur.maxSandbox,
@@ -205,11 +258,12 @@ export class ApiKeyStore {
       expiresAt: s.expiresAt === undefined ? cur.expiresAt : s.expiresAt,
     };
     this.db.run(
-      `UPDATE api_keys SET label = ?, scopes = ?, quota_tokens = ?, quota_period = ?, max_sandbox = ?, allow_network = ?, approvals = ?,
+      `UPDATE api_keys SET label = ?, scopes = ?, console_access = ?, quota_tokens = ?, quota_period = ?, max_sandbox = ?, allow_network = ?, approvals = ?,
          rate_per_min = ?, prompts_per_min = ?, max_concurrent = ?, upload_mb_per_hour = ?, ip_allowlist = ?, expires_at = ?, updated_at = ?
        WHERE id = ?`,
       next.label,
       JSON.stringify([...new Set(next.scopes)]),
+      next.consoleAccess,
       next.quotaTokens,
       next.quotaPeriod,
       next.maxSandbox,

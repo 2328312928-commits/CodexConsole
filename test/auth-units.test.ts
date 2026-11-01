@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { passwordProblem, hashPassword, verifyPassword } from '../server/auth/passwords.js';
 import { base32Decode, base32Encode, generateTotpSecret, hotp, totpCode, verifyTotp } from '../server/auth/totp.js';
-import { deriveKey, generatePairingCode, normalizePairingCode, seal, unseal } from '../server/lib/crypto.js';
+import { deriveKey, seal, unseal } from '../server/lib/crypto.js';
 import { RateLimiter } from '../server/lib/rateLimit.js';
 
 describe('TOTP (RFC 6238)', () => {
@@ -52,18 +52,7 @@ describe('passwords', () => {
   });
 });
 
-describe('pairing codes and sealed secrets', () => {
-  it('generates readable 100-bit codes and normalises user input', () => {
-    const code = generatePairingCode();
-    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{5}(-[0-9A-HJKMNP-TV-Z]{5}){3}$/);
-    const plain = code.replace(/-/g, '');
-    expect(normalizePairingCode(code.toLowerCase())).toBe(plain);
-    expect(normalizePairingCode(` ${plain.slice(0, 10)} ${plain.slice(10)} `)).toBe(plain);
-    expect(normalizePairingCode('OOOOO-IIIII-LLLLL-00000')).toBe('00000111111111100000');
-    expect(normalizePairingCode('UUUUU-UUUUU-UUUUU-UUUUU')).toBeNull();
-    expect(normalizePairingCode('ABC')).toBeNull();
-  });
-
+describe('sealed secrets', () => {
   it('seals with AES-GCM and detects tampering', () => {
     const key = deriveKey(Buffer.alloc(32, 7), 'test');
     const sealed = seal(key, 'JBSWY3DPEHPK3PXP');

@@ -2,7 +2,7 @@
 
 [中文版](FUNNEL.zh-CN.md)
 
-This guide makes the **public API** (`/v1`, API keys only) reachable from the internet, so your own scripts and devices can call it from anywhere. The console UI and the admin area are **not** exposed: they stay on `localhost`, or on your tailnet through `tailscale serve`.
+This guide is for running the console **at home**, without a public server: it makes the **public API** (`/v1`, API keys only) reachable from the internet, so your own scripts can call it from anywhere. The console UI and the admin area are **not** exposed: they stay on `localhost`, or on your tailnet through `tailscale serve`. To put the whole console on a public server instead, use [DEPLOY.md](DEPLOY.md).
 
 Nothing here happens automatically. You run each command yourself, and you can undo it at any time ([Turning it off](#turning-it-off)).
 
@@ -49,9 +49,9 @@ curl -s --haproxy-protocol http://127.0.0.1:8788/v1/health
 
 ## 2. Create a key
 
-In **Admin → API keys → New API key**:
+In **Admin → Keys → New key**:
 
-1. Give only the scopes the tool needs. Leave `shell` and `mcp:manage` off unless you really need them.
+1. Set **Console sign-in** to *Off* and give only the scopes the tool needs. Leave `shell` and `mcp:manage` off unless you really need them.
 2. Set a quota and an expiry.
 3. Choose **Deny automatically** for approvals, unless you plan to answer them.
 4. Copy the key from the dialog. It is shown once.
@@ -76,7 +76,7 @@ curl -s https://<machine>.<tailnet>.ts.net:8443/v1/health
 curl -s https://<machine>.<tailnet>.ts.net:8443/v1/me -H "Authorization: Bearer $CODEX_CONSOLE_KEY"
 ```
 
-**Admin → API keys** should now show your phone's public IP under *Last used*. If it shows `127.0.0.1`, the PROXY header isn't arriving: check the `--proxy-protocol=2` flag. Next steps: [API.md](API.md).
+**Admin → Keys** should now show your phone's public IP under *Last used*. If it shows `127.0.0.1`, the PROXY header isn't arriving: check the `--proxy-protocol=2` flag. Next steps: [API.md](API.md).
 
 ## Turning it off
 
@@ -85,7 +85,7 @@ tailscale funnel --tls-terminated-tcp=8443 off   # stop exposing the API
 tailscale funnel status                          # confirm nothing is public
 ```
 
-To close the listener itself too, set `CC_API_ENABLED=false` and restart. To stop a single tool, revoke its key in **Admin → API keys**: that takes effect immediately, Funnel or not.
+To close the listener itself too, set `CC_API_ENABLED=false` and restart. To stop a single tool, revoke its key in **Admin → Keys**: that takes effect immediately, Funnel or not.
 
 ## Troubleshooting
 

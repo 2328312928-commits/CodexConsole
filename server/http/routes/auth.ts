@@ -1,23 +1,26 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ApiError } from '../../lib/errors.js';
-import { authState, cookieNames, cookieOptions, eventCtx, type AppDeps } from '../context.js';
+import { authState, clientIp, cookieOptions, eventCtx, sessionCookie, type AppDeps } from '../context.js';
 
 const LOCK_WINDOW_MS = 15 * 60_000;
-const LOGIN_FAILS_PER_IP = 5;
-const LOGIN_FAILS_GLOBAL = 20;
-const PAIR_FAILS_PER_IP = 10;
-const DEVICE_COOKIE_MAX_AGE_SEC = 400 * 86_400; // browsers cap cookies at 400 days
+const ADMIN_FAILS_PER_IP = 5;
+const ADMIN_FAILS_GLOBAL = 20;
+// Keys carry 256 random bits, so the lock only stops noise. It is per address: a global
+// lock would let anyone keep the owner out by failing on purpose. During a flood (many
+// failures overall) an address is locked after its first failure instead, so a valid key
+// from an address that has not failed still gets in.
+const KEY_FAILS_PER_IP = 10;
+const KEY_FAILS_FLOOD = 100;
 
-const pairBody = z.object({ code: z.string().min(1).max(64) }).strict();
-const loginBody = z.object({ password: z.string().min(1).max(1024), code: z.string().min(1).max(16) }).strict();
-const totpBody = z.object({ code: z.string().min(1).max(16) }).strict();
+const keyBody = z.object({ key: z.string().min(1).max(200) }).strict();
+const adminBody = z.object({ password: z.string().min(1).max(1024), code: z.string().min(1).max(16) }).strict();
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AppDeps): void {
-  const { config, limiter, audit, owner, devices, logins } = deps;
-  const names = cookieNames(config);
+  const { config, limiter, audit, owner, logins, keys } = deps;
+  const cookieName = sessionCookie(config);
 
-  /** Throws login_locked when too many recent failures share this IP (or overall, if `global` is set). */
+  /** Throws login_locked when too many recent failures share this address (or overall, if `global` is set). */
   function assertNotLocked(scope: string, ip: string, perIp: number, global: number | null): void {
     const ipWait = limiter.retryAfter(`${scope}:ip:${ip}`, perIp, LOCK_WINDOW_MS);
     const allWait = global === null ? 0 : limiter.retryAfter(`${scope}:all`, global, LOCK_WINDOW_MS);
@@ -32,78 +35,79 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   app.get('/api/auth/state', { config: { auth: 'public' } }, async (req) => authState(deps, req));
 
-  app.post('/api/auth/pair', { config: { auth: 'public' } }, async (req, reply) => {
+  // Sign in with an API key: the only thing a browser needs.
+  app.post('/api/auth/key', { config: { auth: 'public' } }, async (req, reply) => {
     if (!owner.exists()) throw new ApiError(503, 'setup_required');
-    const { code } = pairBody.parse(req.body);
+    const { key: token } = keyBody.parse(req.body);
+    const ip = clientIp(req);
+    const flood = limiter.usage('key:all', LOCK_WINDOW_MS) >= KEY_FAILS_FLOOD;
     try {
-      // No global cap: pairing codes carry 100 bits, so spreading guesses over many IPs gains nothing.
-      assertNotLocked('pair', req.ip, PAIR_FAILS_PER_IP, null);
+      assertNotLocked('key', ip, flood ? 1 : KEY_FAILS_PER_IP, null);
     } catch (err) {
-      audit.security('rate_limited', eventCtx(req), { scope: 'pair' });
+      audit.security('login_locked', eventCtx(req), { via: 'key', flood });
       throw err;
     }
-    const result = devices.pair(code);
-    if (!result) {
-      recordFailure('pair', req.ip);
-      audit.security('pair_failure', eventCtx(req));
-      throw new ApiError(400, 'invalid_pairing_code');
-    }
-    // A new device token replaces any login cookie from a previous pairing.
-    reply.setCookie(names.device, result.token, cookieOptions(config, DEVICE_COOKIE_MAX_AGE_SEC));
-    reply.clearCookie(names.session, { path: '/' });
-    audit.security('pair_success', { deviceId: result.device.id, ip: req.ip, userAgent: req.headers['user-agent'] }, { name: result.device.name });
-    return {
-      setupComplete: true,
-      device: { id: result.device.id, name: result.device.name },
-      loggedIn: false,
-      admin: false,
-      ...(req.headers['x-codex-console-token'] === 'return' ? { token: result.token } : {}),
+
+    const result = keys.authenticate(token.trim());
+    const fail = (status: number, code: 'invalid_api_key' | 'api_key_revoked' | 'api_key_expired' | 'console_not_allowed' | 'ip_not_allowed', reason: string, keyId?: string) => {
+      recordFailure('key', ip);
+      audit.security('login_failure', { ...eventCtx(req), apiKeyId: keyId ?? null }, { via: 'key', reason });
+      return new ApiError(status, code);
     };
+    if (!result.ok) {
+      if (result.reason === 'revoked') throw fail(401, 'api_key_revoked', result.reason, result.key?.id);
+      if (result.reason === 'expired') throw fail(401, 'api_key_expired', result.reason, result.key?.id);
+      throw fail(401, 'invalid_api_key', result.reason, result.key?.id);
+    }
+    const key = result.key;
+    // After a rotation the old secret may still work for the API during its grace period, never for the console.
+    if (result.viaPrevious) throw fail(401, 'invalid_api_key', 'rotated', key.id);
+    const problem = keys.consoleProblem(key, ip);
+    if (problem === 'console_not_allowed') throw fail(403, problem, problem, key.id);
+    if (problem === 'ip_not_allowed') throw fail(403, problem, problem, key.id);
+    if (problem) throw fail(401, problem, problem, key.id);
+
+    // A new sign-in replaces whatever this browser was signed in with before.
+    const previous = req.cookies[cookieName] ? logins.validate(req.cookies[cookieName]!) : null;
+    if (previous) logins.revoke(previous.id);
+    limiter.reset(`key:ip:${ip}`);
+    const { row, secret } = logins.create(key.id, ip, req.headers['user-agent']);
+    keys.touch(key, ip);
+    reply.setCookie(cookieName, secret, cookieOptions(config, Math.floor(config.sessions.maxMs / 1000)));
+    req.auth = { login: row, key, admin: false };
+    audit.security('login_success', eventCtx(req), { via: 'key', session: row.id, access: key.consoleAccess });
+    return authState(deps, req);
   });
 
-  app.post('/api/auth/login', { config: { auth: 'device' } }, async (req, reply) => {
-    const { password, code } = loginBody.parse(req.body);
-    const device = req.auth.device!;
+  app.post('/api/auth/logout', { config: { auth: 'public' } }, async (req, reply) => {
+    if (req.auth.login) {
+      logins.revoke(req.auth.login.id);
+      audit.security('logout', eventCtx(req));
+    }
+    reply.clearCookie(cookieName, { path: '/' });
+    req.auth = { login: null, key: null, admin: false };
+    return authState(deps, req);
+  });
+
+  // The admin area needs the owner password and an authenticator code on top of a key sign-in.
+  app.post('/api/auth/admin', { config: { auth: 'login' } }, async (req) => {
+    const { password, code } = adminBody.parse(req.body);
+    const ip = clientIp(req);
     try {
-      assertNotLocked('login', req.ip, LOGIN_FAILS_PER_IP, LOGIN_FAILS_GLOBAL);
+      assertNotLocked('admin', ip, ADMIN_FAILS_PER_IP, ADMIN_FAILS_GLOBAL);
     } catch (err) {
-      audit.security('login_locked', eventCtx(req));
+      audit.security('login_locked', eventCtx(req), { via: 'admin' });
       throw err;
     }
     const passwordOk = await owner.checkPassword(password);
     // Only spend the TOTP step when the password is right, so guesses can't burn codes.
-    const codeOk = passwordOk && owner.consumeTotp(code);
+    const codeOk = passwordOk && owner.consumeTotp(code.replace(/\s/g, ''));
     if (!passwordOk || !codeOk) {
-      recordFailure('login', req.ip);
-      audit.security('login_failure', eventCtx(req), { reason: passwordOk ? 'totp' : 'password' });
+      recordFailure('admin', ip);
+      audit.security('admin_verify_failure', eventCtx(req), { reason: passwordOk ? 'totp' : 'password' });
       throw new ApiError(401, 'invalid_credentials');
     }
-    limiter.reset(`login:ip:${req.ip}`);
-    const { row, secret } = logins.create(device.id, req.ip, req.headers['user-agent'], true);
-    reply.setCookie(names.session, secret, cookieOptions(config, Math.floor(config.sessions.maxMs / 1000)));
-    audit.security('login_success', eventCtx(req), { session: row.id });
-    req.auth.login = row;
-    req.auth.admin = true;
-    return authState(deps, req);
-  });
-
-  app.post('/api/auth/logout', { config: { auth: 'login' } }, async (req, reply) => {
-    logins.revoke(req.auth.login!.id);
-    reply.clearCookie(names.session, { path: '/' });
-    audit.security('logout', eventCtx(req));
-    req.auth.login = null;
-    req.auth.admin = false;
-    return authState(deps, req);
-  });
-
-  app.post('/api/auth/admin/verify', { config: { auth: 'login' } }, async (req) => {
-    const { code } = totpBody.parse(req.body);
-    assertNotLocked('admin', req.ip, LOGIN_FAILS_PER_IP, LOGIN_FAILS_GLOBAL);
-    if (!owner.consumeTotp(code)) {
-      recordFailure('admin', req.ip);
-      audit.security('admin_verify_failure', eventCtx(req));
-      throw new ApiError(401, 'invalid_totp');
-    }
+    limiter.reset(`admin:ip:${ip}`);
     logins.markAdminVerified(req.auth.login!.id);
     audit.security('admin_verify_success', eventCtx(req));
     req.auth.admin = true;

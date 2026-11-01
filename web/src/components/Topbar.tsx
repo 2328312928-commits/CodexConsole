@@ -84,6 +84,12 @@ export function Topbar({ auth, onSignOut }: { auth: AuthState; onSignOut?: () =>
       {loggedIn ? <CodexPill /> : null}
       <ThemeSwitch />
       <LangSwitch />
+      {loggedIn && auth.key ? (
+        <span className="status-pill hide-mobile" title={t('nav.signedInWith', { label: auth.key.label })}>
+          <Icon name="key" size={14} />
+          {auth.key.label}
+        </span>
+      ) : null}
       {loggedIn ? (
         <button type="button" className="btn ghost small" onClick={onSignOut} aria-label={t('nav.signOut')} title={t('nav.signOut')}>
           <Icon name="logout" size={16} />

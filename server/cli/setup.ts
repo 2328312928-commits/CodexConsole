@@ -1,28 +1,35 @@
 import { detectLang, translate, type Lang, type MessageKey, type Vars } from '../../shared/i18n/index.js';
+import { consoleKeySettings } from '../auth/apiKeys.js';
 import { MIN_PASSWORD_LENGTH, passwordProblem } from '../auth/passwords.js';
 import { generateTotpSecret, otpauthUri, verifyTotp } from '../auth/totp.js';
 import { ConfigError, loadConfig, loadDotEnv, type AppConfig } from '../config.js';
 import { qrTerminal } from '../lib/qr.js';
 import { openStores } from '../runtime.js';
+import { defaultFolderName } from '../services/workspace.js';
 import { Aborted, Prompter } from './prompt.js';
 
 interface Flags {
   lang?: Lang;
   resetPassword: boolean;
   resetTotp: boolean;
-  revokeAll: boolean;
-  pair?: string;
+  signOutAll: boolean;
+  listKeys: boolean;
+  newKey?: string;
+  revokeKey?: string;
 }
 
 function parseFlags(argv: string[], t: (k: MessageKey, v?: Vars) => string): Flags {
-  const flags: Flags = { resetPassword: false, resetTotp: false, revokeAll: false };
+  const flags: Flags = { resetPassword: false, resetTotp: false, signOutAll: false, listKeys: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === '--reset-password') flags.resetPassword = true;
     else if (a === '--reset-totp') flags.resetTotp = true;
-    else if (a === '--revoke-all') flags.revokeAll = true;
-    else if (a === '--pair') flags.pair = argv[++i] ?? '';
+    else if (a === '--sign-out-all') flags.signOutAll = true;
+    else if (a === '--list-keys') flags.listKeys = true;
+    else if (a === '--new-key') flags.newKey = argv[++i] ?? '';
+    else if (a === '--revoke-key') flags.revokeKey = argv[++i] ?? '';
     else if (a === '--lang') flags.lang = argv[++i] === 'zh-CN' ? 'zh-CN' : 'en';
+    else if (a === '--is-set-up') continue;
     else {
       console.error(t('cli.unknownOption', { option: a }));
       console.error(t('cli.options'));
@@ -52,6 +59,12 @@ async function main(): Promise<void> {
     throw err;
   }
   const stores = openStores(config);
+  // For scripts (the server installer): exit 0 when setup is done, 1 when it is not.
+  if (argv.includes('--is-set-up')) {
+    const done = stores.owner.exists();
+    stores.db.close();
+    process.exit(done ? 0 : 1);
+  }
   const prompt = new Prompter();
   const out = (s = '') => process.stdout.write(s + '\n');
 
@@ -97,25 +110,42 @@ async function main(): Promise<void> {
     return null;
   }
 
-  async function printPairing(name: string): Promise<void> {
-    const { code } = stores.devices.create(name.slice(0, 60), null);
-    const url = `${config.publicOrigin}/pair#code=${encodeURIComponent(code)}`;
-    stores.audit.security('device_created', {}, { name, via: 'cli' });
+  function issueKey(label: string): void {
+    // A console-only key never needs its API folder; it is created if the key is ever given API scopes.
+    const { key, secret } = stores.keys.create(consoleKeySettings(label), `api/${defaultFolderName(label)}`);
+    stores.audit.security('api_key_created', { apiKeyId: key.id }, { label: key.label, consoleAccess: 'full', via: 'cli' });
     out();
-    out(t('cli.pairingCode', { name }));
-    out(`\n    ${code}\n`);
-    out(t('cli.pairingUrl', { url }));
-    out(t('cli.pairingQr'));
-    out(await qrTerminal(url));
+    out(t('cli.keyCreated', { label: key.label }));
+    out(`\n    ${secret}\n`);
+    out(t('cli.keyUse', { url: config.publicOrigin }));
   }
 
   try {
-    if (flags.revokeAll) {
+    if (flags.signOutAll) {
       requireOwner();
       out(t('cli.revokedAll', { count: stores.logins.revokeAll(null) }));
-    } else if (flags.pair !== undefined) {
+    } else if (flags.newKey !== undefined) {
       requireOwner();
-      await printPairing(flags.pair.trim() || t('cli.deviceNameDefault'));
+      issueKey(flags.newKey.trim() || t('cli.keyLabelDefault'));
+    } else if (flags.listKeys) {
+      const keys = stores.keys.list();
+      if (keys.length === 0) out(t('cli.keyListEmpty'));
+      for (const k of keys) {
+        const status = t(`keys.status.${stores.keys.status(k)}`);
+        const access = t(`keys.console.${k.consoleAccess}`);
+        const used = k.lastUsedAt ? new Date(k.lastUsedAt).toISOString().slice(0, 16).replace('T', ' ') : t('common.never');
+        out(`  ${k.id}  ${status.padEnd(8)}  ${access.padEnd(14)}  ${used.padEnd(16)}  ${k.label}`);
+      }
+    } else if (flags.revokeKey !== undefined) {
+      const id = flags.revokeKey.trim();
+      if (!stores.keys.get(id)) {
+        out(t('cli.keyNotFound', { id }));
+        process.exit(1);
+      }
+      stores.keys.revoke(id);
+      const ended = stores.logins.endForKey(id);
+      stores.audit.security('api_key_revoked', { apiKeyId: id }, { via: 'cli', signedOut: ended });
+      out(t('cli.keyRevoked', { id, count: ended }));
     } else if (flags.resetPassword) {
       requireOwner();
       await stores.owner.setPassword(await askNewPassword());
@@ -134,15 +164,18 @@ async function main(): Promise<void> {
       out(t('cli.alreadySetUp'));
       out(t('cli.options'));
     } else {
+      out(t('cli.intro'));
+      out();
       const password = await askNewPassword();
       out();
       const secret = await enrolTotp();
       if (!secret) process.exit(1);
       await stores.owner.create(password, secret);
       stores.audit.security('setup_completed', {}, { via: 'cli' });
-      const fallback = t('cli.deviceNameDefault');
-      const name = (await prompt.ask(t('cli.deviceNamePrompt', { default: fallback }))).trim() || fallback;
-      await printPairing(name);
+      const fallback = t('cli.keyLabelDefault');
+      const label = (await prompt.ask(t('cli.keyLabelPrompt', { default: fallback }))).trim() || fallback;
+      issueKey(label);
+      out();
       out(t('cli.done'));
       out(t('cli.nextSteps', { url: config.publicOrigin }));
     }

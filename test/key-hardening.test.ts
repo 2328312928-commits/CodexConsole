@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ServerEvent } from '../shared/api.js';
-import { Client, createKey, KeyClient, makeHarness, pairAndLogin, waitForEvent, type Harness } from './helpers.js';
+import { Client, createKey, KeyClient, makeHarness, signIn, waitForEvent, type Harness } from './helpers.js';
 
 const endOf = (ev: ServerEvent) => (ev.type === 'turn_completed' ? ev.end : null);
 
@@ -9,7 +9,7 @@ describe('API key caps, quota and lifetime', () => {
   let admin: Client;
   beforeAll(async () => {
     h = await makeHarness();
-    admin = await pairAndLogin(h);
+    admin = await signIn(h);
   });
   afterAll(async () => {
     await h?.close();
@@ -145,7 +145,7 @@ describe('public API rate budget', () => {
   });
 
   it('keeps unauthenticated and failed calls from using up the budget of valid keys', async () => {
-    const admin = await pairAndLogin(h);
+    const admin = await signIn(h);
     const { client } = await createKey(h, admin);
     const bad = new KeyClient(h, `cck_${'0'.repeat(16)}.${'A'.repeat(43)}`);
     for (let i = 0; i < 12; i++) expect((await bad.get('/v1/me')).statusCode).toBe(401);

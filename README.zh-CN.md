@@ -1,6 +1,8 @@
 # Codex 控制台
 
-一个只属于你自己的 Web 控制台，用来远程使用**你自己的** [Codex CLI](https://github.com/openai/codex)，登录方式是**你的 ChatGPT 套餐**（不消耗 API 额度）。在你自己的浏览器和手机上可以：
+一个只属于你自己的 Web 控制台，用来远程使用**你自己的** [Codex CLI](https://github.com/openai/codex)，登录方式是**你的 ChatGPT 套餐**（不消耗 API 额度）。只需把它部署到服务器上一次，之后在你任何一台电脑的浏览器里打开它、粘贴你的一把 API 密钥，就能使用完整控制台，那台电脑上什么都不用装。
+
+在你自己的浏览器和手机上可以：
 
 - 向 Codex 发送提示词，实时查看流式回复（思考过程、命令及输出、文件改动、计划、MCP 工具调用）
 - 引导或停止正在进行的一轮，回答 Codex 的问题和 MCP 服务器的表单，批准或拒绝 Codex 请求运行的命令和文件修改
@@ -9,113 +11,85 @@
 - 直接查看 Codex 生成或查看的图片和视频
 - 管理会话：新建、重命名、归档、删除、搜索，并可导入在终端中开始的线程
 - 管理 Codex 的 **MCP 服务器**：列出、添加、编辑、启用/停用、移除、登录
-- 为你自己的脚本和设备创建 **API 密钥**，可设置额度、有效期、权限范围，可轮换和吊销，并通过独立的公网 API 在互联网上使用
-- 使用私有的**管理后台**：查看每一次请求（时间、会话、设备或密钥、提示词大小、耗时、状态、令牌、文件），以及套餐用量限制、每个密钥的用量、设备令牌、登录、文件传输和安全日志
+- 为你的每台设备单独签发 **API 密钥**，可设置有效期、额度、速率限制和各项上限，可轮换和吊销；带 API 权限的密钥还能让你的脚本通过公网 API（`/v1`）使用
+- 使用私有的**管理后台**：查看每一次请求（时间、会话、密钥、提示词大小、耗时、状态、令牌、文件），以及套餐用量限制、每个密钥的用量、当前登录、文件传输和安全日志
 
 所有界面都有 **English 和简体中文** 两种语言（顶栏可切换），并支持浅色和深色。English docs: [README.md](README.md)。Codex 的全部功能及其在控制台中的位置：[docs/FEATURES.zh-CN.md](docs/FEATURES.zh-CN.md)。
 
-> **这相当于一个远程终端。** Codex 会在运行控制台的机器上执行命令。能进入控制台的人就能做 Codex 能做的事。在 `localhost` 以外使用前，请先阅读 [SECURITY.md](SECURITY.md)。
+> **这相当于一个远程终端。** Codex 会在运行控制台的机器上执行命令。拿到你任何一把密钥的人，都能在那里做 Codex 能做的事。请像对待密码一样保管密钥，并阅读 [SECURITY.zh-CN.md](SECURITY.zh-CN.md)。
 
 ## 工作原理
 
 ```
-你的设备 ──HTTPS──▶ Codex 控制台（Node.js，默认监听 127.0.0.1:8787）
-                    ├─ 认证：设备令牌 + 密码 + 验证器动态码，频率限制
-                    ├─ REST API + 服务器推送事件（实时流式输出）
-                    ├─ SQLite（Node 内置）：会话、对话记录、请求日志、审计日志
-                    ├─ 文件服务，限制在工作区文件夹内
-                    └─ 子进程：`codex app-server` ──▶ 你的 ChatGPT 套餐（通过 `codex login`）
-你的脚本 ──HTTPS──▶ 公网 API（可选，127.0.0.1:8788，只有 /v1，只接受 API 密钥）
+你的浏览器 ──HTTPS──▶ Caddy（Let's Encrypt，域名或 IP）──▶ Codex 控制台（127.0.0.1:8787）
+                                                            ├─ 登录：API 密钥 → 会话 Cookie；管理后台：再加密码 + 验证器动态码
+                                                            ├─ REST API + 服务器推送事件（实时流式输出）
+                                                            ├─ SQLite（Node 内置）：会话、对话记录、请求日志、审计日志
+                                                            ├─ 文件服务，限制在工作区文件夹内
+                                                            └─ 子进程：`codex app-server` ──▶ 你的 ChatGPT 套餐
+你的脚本 ──HTTPS──▶ Caddy ──/v1──▶ 公网 API（127.0.0.1:8788，只接受带权限的 API 密钥）
 ```
 
-控制台通过 `codex app-server` 驱动 Codex。这是 Codex 官方的 JSON-RPC 接口，Codex 的 IDE 扩展和桌面应用也用它。
+控制台通过 `codex app-server` 驱动 Codex。这是 Codex 官方的 JSON-RPC 接口，Codex 的 IDE 扩展和桌面应用用的也是它。
 
 - **会话：**每个会话就是一个 Codex 线程。
-- **提示词：**每条提示词启动一轮对话（`turn/start`），回复逐字流式显示。
-- **审批：**审批请求显示为“允许 / 拒绝”卡片，超时未处理会自动拒绝。
+- **提示词：**一条提示词开始一轮（`turn/start`），回复逐字流式返回。
+- **审批：**审批请求以“允许 / 拒绝”卡片显示。超时未回答的请求会被拒绝。
 - **用量限制：**来自 `account/rateLimits/read`。
-- **登录：**Codex 的登录信息保存在 `~/.codex`，控制台从不读取或复制这些凭据。
+- **Codex 登录：**Codex 把自己的登录信息保存在它的 `CODEX_HOME` 中。你只需在 **管理后台 → Codex** 中登录一次（设备码）；控制台从不读取或复制这些凭据。
 
-**版本固定：**Codex CLI 的版本固定在 `package.json` 中（`@openai/codex` 0.164.0），随项目一起安装。`npm run codex:check` 会检查已安装的 Codex 是否仍支持控制台用到的每一个协议方法。
+**版本锁定。**Codex CLI 的版本锁定在 `package.json` 中（`@openai/codex` 0.164.0），随项目一起安装。`npm run codex:check` 会检查已安装的 Codex 是否仍支持控制台用到的每个协议方法。
 
-## 环境要求
+## 部署到你的服务器（主要方式）
 
-- **Node.js 22.13 或更高版本。**推荐 Node 24 LTS；Node 20 已停止维护，不受支持。控制台使用 Node 内置的 SQLite，无需编译任何东西。
-- **系统：**Linux 或 macOS；Windows 可通过 WSL 使用。
-- **包含 Codex 的 ChatGPT 套餐。**
-- **验证器应用**，例如 Google Authenticator、1Password、Authy、Microsoft Authenticator。
+你需要一台能用 SSH 登录的 Linux 服务器（Ubuntu 22.04/24.04 或 Debian 12/13，x86-64 或 ARM64，内存 1 GB 以上），以及一个指向它的域名，或者只用它的公网 IPv4 地址。云服务商的防火墙需要开放 80 和 443 端口。在你自己的电脑上、在本仓库中运行：
 
-## 快速开始（在运行 Codex 的机器上）
+```bash
+./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7
+```
+
+或者使用域名：
+
+```bash
+./deploy/deploy.sh me@my-server --domain console.example.com --email me@example.com
+```
+
+脚本会通过 SSH 复制应用（只复制 git 跟踪的文件：绝不包括 `.env`、数据或密钥），在服务器上构建，安装 Node.js 和 Caddy，申请 HTTPS 证书，并配置一个受限的系统服务、防火墙、fail2ban 和自动安全更新。首次安装时，它会在这个终端里让你设置管理员密码和验证器，然后输出**你的第一把 API 密钥**。
+
+然后：
+
+1. 打开它显示的地址，粘贴密钥。浏览器只需要这一步。
+2. 进入 **管理后台**（密码 + 验证器动态码）→ **Codex** → 用你的 ChatGPT 套餐登录。
+3. 为其他每台设备各签发一把密钥：**管理后台 → 密钥 → 新建密钥**，或在服务器上运行 `sudo codex-console setup --new-key "手机"`。
+
+用同一条命令再次运行即可更新；你的数据保留在服务器上。部署的全部细节（选项、它会修改什么、更新、备份、故障排查）：**[docs/DEPLOY.zh-CN.md](docs/DEPLOY.zh-CN.md)**。
+
+## 在自己的电脑上运行
 
 ```bash
 npm ci
 npm run build
-npx codex login            # 用 ChatGPT 登录；无图形界面的服务器请用 `npx codex login --device-auth`
-npm run codex:check        # 可选：确认 Codex 协议兼容且已登录
-npm run setup              # 设置密码、绑定验证器、生成第一个配对码
+npm run setup              # 管理员密码 + 验证器 + 你的第一把 API 密钥
 npm start
 ```
 
-然后：
+打开 `http://127.0.0.1:8787`，粘贴密钥，然后在 **管理后台 → Codex** 中登录 Codex。`npm run setup -- --lang zh-CN` 以中文运行设置。
 
-1. 在同一台机器上打开 `http://127.0.0.1:8787`。
-2. 输入 `npm run setup` 给出的配对码（或扫描它的二维码）。
-3. 用密码和验证器动态码登录。
+从使用设备配对的旧版本升级？配对已经取消；你的所有者账户和 API 密钥都会保留（已有的密钥仍只用于 API）。运行一次 `npm run setup -- --new-key "笔记本"`，即可得到一把能登录控制台的密钥。
 
-用 `npm run setup -- --lang zh-CN` 可以以中文运行设置程序。
+Codex 默认在 `~/codex-workspace/` 中工作，每个会话一个文件夹。控制台自己的数据（数据库、密钥材料、媒体）保存在 `~/.codexconsole/`，只有所有者可访问。本仓库中不存放任何机密。
 
-Codex 默认在 `~/codex-workspace/` 中工作，每个会话一个文件夹。控制台自身的数据（数据库、密钥、媒体）保存在 `~/.codexconsole/`，仅所有者可读写。本仓库中不包含任何机密信息。
+如果没有公网服务器、想从别处访问家里的机器，可以用 Tailscale（`tailscale serve --bg --https=443 http://127.0.0.1:8787`，然后在 `.env` 中设置 `CC_PUBLIC_ORIGIN=https://<机器名>.<tailnet>.ts.net` 和 `CC_TRUST_PROXY=loopback`），或使用你自己的 TLS 证书（`CC_HOST=0.0.0.0`、`CC_TLS_CERT`、`CC_TLS_KEY`、`CC_PUBLIC_ORIGIN`）。除 `127.0.0.1` 外，服务器拒绝明文 HTTP。全部设置见 [`.env.example`](.env.example)。systemd 用户服务示例见 [`deploy/codex-console.service`](deploy/codex-console.service)。
 
-## 添加你的其他设备
+## 密钥与登录
 
-要添加手机或笔记本：
+你的每台设备都有自己的密钥，因此可以单独查看它的用量、单独吊销。
 
-1. 进入**管理后台 → 设备 → 添加设备**，给它起个名字。
-2. 在新设备上扫描二维码，或在新设备上打开 `/pair` 并输入配对码。配对码只能使用一次，15 分钟后失效。
-3. 在该设备上用密码和验证器动态码登录。
-
-每台设备都有自己的令牌，管理后台会按设备显示用量。**吊销**某台设备后，它会被永久退出登录。
-
-只有在通过 HTTPS 提供服务之后（见下一节），其他设备才能访问控制台。
-
-## 从其他设备访问（HTTPS）
-
-服务器只监听 `127.0.0.1`，并且拒绝在其他地址上使用明文 HTTP。可以选择以下任一方式：
-
-**A. Tailscale（推荐：只有你自己的设备能访问，完全不公开）**
-
-```bash
-tailscale serve --bg --https=443 http://127.0.0.1:8787
-```
-
-`.env`：
-
-```bash
-CC_PUBLIC_ORIGIN=https://<机器名>.<tailnet>.ts.net
-CC_TRUST_PROXY=loopback
-```
-
-**B. 使用你自己的域名和 Caddy（自动申请 Let's Encrypt 证书）。**这种方式是公开的：控制台可从互联网访问，由设备令牌、密码和验证器动态码保护。见 [`deploy/Caddyfile.example`](deploy/Caddyfile.example)。
-
-```bash
-CC_PUBLIC_ORIGIN=https://console.example.com
-CC_TRUST_PROXY=loopback
-```
-
-**C. 内置 TLS**（例如在局域网中，用 `mkcert` 或 `tailscale cert` 生成的证书）：
-
-```bash
-CC_HOST=0.0.0.0
-CC_TLS_CERT=/path/to/fullchain.pem
-CC_TLS_KEY=/path/to/privkey.pem
-CC_PUBLIC_ORIGIN=https://mybox.lan:8787
-```
-
-修改 `.env` 后需重启控制台。全部配置项见 [`.env.example`](.env.example)。
-
-方案 A–C 针对控制台本身。要从互联网调用**公网 API**，见下一节；它可以与方案 A 同时使用（控制台通过 `tailscale serve` 用 443，API 通过 `tailscale funnel` 用 8443）。
-
-要在 Linux 上让控制台常驻运行，可使用 [`deploy/codex-console.service`](deploy/codex-console.service) 中的 systemd 用户服务，文件开头写有安装方法。
+- **每把密钥的控制台登录：**“完整控制台”（所有会话和整个工作区，永远不包括管理后台）、“仅限文件夹”（它自己的会话和一个文件夹），或“关闭”（只用于 API）。
+- **每把密钥的上限：**最高沙箱级别、网络访问、审批（询问你或自动拒绝）、令牌额度、每分钟提示数、同时运行的提示数、上传量、IP 允许列表和有效期。这些上限在控制台和 API 中同样生效。有上限的密钥可以查看所有会话，但只能在自己的会话中工作；`!` shell 命令需要完全访问和网络。拥有完全访问和网络的密钥没有可再限制的内容，用起来和所有者的控制台一样。
+- **吊销**会让密钥立即在所有地方退出登录，包括实时流和正在运行的提示。**轮换**会签发新的密钥值，并让旧密钥值退出控制台（可选的宽限期只让它在 API 脚本中继续有效）。修改密钥的控制台登录方式也会让它退出登录。
+- **管理后台 → 密钥** 还会列出当前登录的每个浏览器，包括所用的密钥、地址和浏览器信息，你可以让其中任何一个退出登录。
+- 一次登录闲置 12 小时后失效，最长 7 天（`CC_SESSION_IDLE_HOURS`、`CC_SESSION_MAX_DAYS`）。
 
 ## 使用 Codex
 
@@ -138,75 +112,67 @@ CC_PUBLIC_ORIGIN=https://mybox.lan:8787
 
 **管理后台 → MCP 服务器** 管理 Codex 使用的 MCP 服务器。改动会写入主机上 Codex 的 `config.toml`：
 
-- **本地服务器**在主机上运行一个命令，以你的用户身份运行，不受 Codex 沙箱限制。只添加你信任的命令。环境变量值只写不读：控制台不会再显示它们。
-- **远程服务器**必须使用 `https://`。对于 OAuth 服务器，**登录** 会显示授权链接。控制台不会替你打开它；登录在主机的浏览器中完成。
+- **本地服务器**在主机上运行一个命令，以控制台的用户身份运行，不受 Codex 沙箱限制。只添加你信任的命令。环境变量值只写不读：控制台不会再显示它们。
+- **远程服务器**必须使用 `https://`。对于 OAuth 服务器，**登录** 会显示授权链接。控制台不会替你打开它。
 
 MCP 工具调用会连同参数、进度和结果显示在对话记录中。
 
-## 公网 API 与 API 密钥
+## 公网 API
 
-**管理后台 → API 密钥** 为你自己的脚本和设备创建密钥。它们只能用于独立的监听端口（`127.0.0.1:8788`，默认关闭），该端口只提供 `/v1`，永远不提供控制台或管理区。
-
-- **每个密钥可设置：**标签、有效期、令牌额度（每天、每月或总计）、权限范围、最高沙箱级别、网络、遇到审批时的处理方式（自动拒绝或询问你）、速率限制、IP 允许列表，以及它自己的工作区文件夹。
-- **密钥**只显示一次，只以 HMAC 形式保存。可以**轮换**（可选宽限期）或立即**吊销**。
-- **用量：**每个密钥的用量（提示数、令牌、传输、30 天图表、最近的提示）都在管理后台中。请求记录、文件传输和安全日志都可以按密钥筛选。
-
-用 `CC_API_ENABLED=true` 开启。要在任何地方访问，请使用带 PROXY 协议的 Tailscale Funnel，它只开放 API 端口：分步指南见 [docs/FUNNEL.zh-CN.md](docs/FUNNEL.zh-CN.md)。接口、权限范围和示例见 [docs/API.zh-CN.md](docs/API.zh-CN.md)。
+带 API 权限的密钥可以为你自己的脚本调用 `/v1`：部署在服务器上时地址是 `https://<你的地址>/v1`；在自己的电脑上设置 `CC_API_ENABLED=true` 后位于 `127.0.0.1:8788`（从外部访问可用 Tailscale Funnel：[docs/FUNNEL.zh-CN.md](docs/FUNNEL.zh-CN.md)）。接口、权限范围和示例见 [docs/API.zh-CN.md](docs/API.zh-CN.md)。
 
 ## 安全概要
 
-- **每次登录都需要三重验证：**
-  - 已配对的设备令牌：256 位，只保存 HMAC 哈希，放在 HttpOnly、Secure、SameSite=Strict 的 Cookie 中
-  - 密码：Argon2id
-  - TOTP 动态码：每个只能用一次，静态加密保存
-- **管理后台二次验证：**空闲 15 分钟后，进入管理后台需要新的动态码。
-- **频率限制：**
-  - 登录：每个 IP 15 分钟内最多失败 5 次，总计 20 次
-  - 配对尝试
-  - 每台设备的 API 调用和提示词数量
-  - 每台设备每小时的上传字节数
-- **请求检查：**
-  - Host 白名单（防止 DNS 重绑定）
-  - 所有修改类请求都会检查 Origin，并要求带自定义请求头（防止 CSRF）
-  - 严格的内容安全策略（CSP）和其他安全响应头
-- **文件：**所有文件访问都限制在工作区内，拒绝路径穿越和指向工作区外的符号链接。HTML 只以纯文本显示，文件响应带沙箱 CSP。
-- **审计：**每一次 API 调用、提示词、文件传输和安全事件都会被记录，保留期可配置。
-- **API 密钥：**以 HMAC 形式保存。只能用于独立的 `/v1` 监听端口，各自有权限范围、额度、速率限制，以及沙箱、网络和审批上限。错误密钥按 IP 限流。`shell` 和 `mcp:manage` 默认关闭，除非你明确授予。
+- **登录：**API 密钥（`cck_…`，256 位随机数，只保存 HMAC）会创建一个会话，存放在 HttpOnly、Secure、SameSite=Strict 的 Cookie 中。每次请求都会重新检查密钥，因此吊销、过期、取消控制台登录权限或不符合 IP 允许列表，都会立即结束会话。
+- **管理后台：**单独保护。在用密钥登录之外，还需要所有者密码（Argon2id）和一次性的 TOTP 动态码，闲置 15 分钟后重新锁定。在浏览器中，单凭任何密钥都打不开它。不过 Codex 以控制台自己的用户身份运行，所以拥有完全访问的密钥等同于所有者：见 [SECURITY.zh-CN.md](SECURITY.zh-CN.md#管理后台隔离的局限)。
+- **速率限制：**
+  - 密钥登录：同一 IP 在 15 分钟内失败 10 次后锁定该地址（只按地址锁定，别人无法从其他地方把你锁在外面）；遭到大量尝试时，一个地址失败一次即被锁定
+  - 解锁管理后台：同一 IP 在 15 分钟内最多失败 5 次，全局 20 次
+  - 每把密钥的请求数、提示数，以及每小时上传字节数
+- **请求检查：**Host 允许列表（防止 DNS 重绑定）、每个修改状态的请求都检查 Origin 并要求自定义请求头（防 CSRF）、严格的内容安全策略及其他安全响应头。
+- **文件：**一切都限制在工作区（或密钥的文件夹）内。拒绝路径穿越和指向外部的符号链接。HTML 以纯文本显示，文件带沙箱 CSP 提供。
+- **服务器：**只在本机回环地址上运行、由 Caddy 反向代理，使用独立的系统用户，数据文件夹以外全部只读；防火墙只开放 SSH、80 和 443；fail2ban；自动安全更新。
+- **审计：**每次 API 调用、提示、文件传输、登录和安全事件都会记录，并注明所用的密钥。保留期限可配置。
 
-详细说明以及设备丢失时的处理方法见 [SECURITY.md](SECURITY.md)。
+完整说明，以及设备或密钥丢失时该怎么做：[SECURITY.zh-CN.md](SECURITY.zh-CN.md)。
 
-## 恢复命令（在主机上运行）
+## 恢复命令
 
-| 命令 | 作用 |
+在部署好的服务器上使用 `sudo codex-console setup …`；在自己的电脑上使用 `npm run setup -- …`。
+
+| 选项 | 作用 |
 | --- | --- |
-| `npm run setup -- --pair "笔记本"` | 生成新的配对码（例如无法进入管理后台时） |
-| `npm run setup -- --revoke-all` | 结束所有登录会话 |
-| `npm run setup -- --reset-password` | 设置新密码，并结束所有登录 |
-| `npm run setup -- --reset-totp` | 绑定新的验证器，并结束所有登录 |
+| `--new-key "笔记本"` | 再签发一把完整控制台密钥（例如所有密钥都丢失时） |
+| `--list-keys` | 列出密钥及其状态和最近使用时间 |
+| `--revoke-key ID` | 吊销密钥，并在所有地方退出登录 |
+| `--sign-out-all` | 结束所有控制台登录 |
+| `--reset-password` | 设置新的管理员密码；结束所有登录 |
+| `--reset-totp` | 绑定新的验证器；结束所有登录 |
 
 ## 开发
 
 ```bash
-npm run dev -- --fake-codex   # 界面 + 服务器，使用模拟的 Codex：无需登录，不会调用 OpenAI
-npm run dev                   # 同上，但使用你真实的 Codex
+npm run dev -- --fake-codex   # 界面 + 服务器，使用模拟的 Codex：无需登录，不调用 OpenAI
+npm run dev                   # 同上，使用你真实的 Codex
 npm test                      # 单元测试 + 集成测试（使用模拟的 Codex）
 npm run typecheck
 ```
 
-`test/fake-codex/` 中的模拟服务实现了与 Codex 0.164.0 相同的协议结构。在提示词中加入以下关键字可以触发相应功能：`approve`、`permission`、`question`、`elicit`、`mcp`、`image`、`video`、`edit`、`slow`、`steady`、`fail`、`fail limit`。
+`test/fake-codex/` 中的模拟 app-server 实现了与 Codex 0.164.0 相同的协议结构。提示词中的关键字会触发对应功能：`approve`、`permission`、`question`、`elicit`、`mcp`、`image`、`video`、`edit`、`slow`、`steady`、`fail`、`fail limit`。
 
 | 路径 | 内容 |
 | --- | --- |
 | `server/` | Fastify API、认证、Codex 桥接（`server/codex/`）、命令行工具（`server/cli/`） |
 | `web/` | React 界面（Vite） |
-| `shared/` | 类型、协议子集（`shared/codex.ts`）以及中英文词典（`shared/i18n/`） |
+| `shared/` | 类型、协议子集（`shared/codex.ts`）以及 EN / 中文词典（`shared/i18n/`） |
+| `deploy/` | `deploy.sh`（在你的电脑上运行）、`install.sh`（在服务器上运行）、示例 |
 | `test/` | Vitest 测试和模拟的 Codex |
 
-新增界面文字时，必须同时在 `shared/i18n/en.ts` 和 `shared/i18n/zh-CN.ts` 中添加对应条目，否则 TypeScript 编译和 i18n 测试都会失败。
+新增界面文字时，需要同时在 `shared/i18n/en.ts` 和 `shared/i18n/zh-CN.ts` 中添加键，否则 TypeScript 和 i18n 测试会失败。
 
 ## 说明
 
-- **仅供个人使用。**本项目只为一位所有者设计；与他人共享你的 ChatGPT 套餐违反 OpenAI 的条款。
-- **用量限制：**管理后台显示的是 Codex 报告的套餐用量，控制台不会绕过这些限制。
-- **升级 Codex：**修改 `package.json` 中的 `@openai/codex` 版本，运行 `npm install`，再运行 `npm run codex:check`。
-- **有意不包含的功能：**Codex 的登录和退出（请在主机上运行 `codex login`）、反馈上传、语音 / 实时对话、Windows 沙箱设置、Codex 云端和远程控制功能，以及插件市场安装。
+- **仅限个人使用。**它是为一位所有者及其自己的设备设计的。与他人共享你的 ChatGPT 套餐违反 OpenAI 的条款。
+- 管理后台中显示的**用量限制**是 Codex 为你的套餐报告的数据。控制台不会绕过它们。
+- **升级 Codex：**修改 `package.json` 中的 `@openai/codex`，运行 `npm install`，再运行 `npm run codex:check`；在服务器上则重新部署。
+- **有意不包含：**语音 / 实时对话、Windows 沙箱设置、Codex 云端和远程控制功能（见 [docs/FEATURES.zh-CN.md](docs/FEATURES.zh-CN.md)）。

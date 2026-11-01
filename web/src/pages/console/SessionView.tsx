@@ -5,6 +5,7 @@ import { navigate } from '../../router';
 import { useCodexStatus } from '../../codexStatus';
 import { Menu, type MenuItem } from '../../components/Menu';
 import { ConfirmDialog, ErrorAlert, Spinner } from '../../components/ui';
+import { keyCapped, useSignedInKey } from '../../auth';
 import { useI18n } from '../../i18n';
 import { Icon } from '../../icons';
 import { Composer, type Attachment, type PromptExtras, type ToolDialog } from './Composer';
@@ -89,13 +90,18 @@ export function SessionView({
   }, [stream.entries, stream.live, stream.approvals, stream.questions]);
 
   const running = stream.live !== null || session.running;
-  const disabledReason = !status
-    ? null
-    : status.state !== 'ready'
-      ? t('error.codex_unavailable')
-      : !status.signedIn
-        ? t('composer.disabledNotSignedIn')
-        : null;
+  // A capped key may look at other keys' sessions but only work in its own.
+  const key = useSignedInKey();
+  const viewOnly = keyCapped(key) && session.apiKey?.id !== key?.id;
+  const disabledReason = viewOnly
+    ? t('composer.viewOnly')
+    : !status
+      ? null
+      : status.state !== 'ready'
+        ? t('error.codex_unavailable')
+        : !status.signedIn
+          ? t('composer.disabledNotSignedIn')
+          : null;
 
   const act = useCallback(async (fn: () => Promise<void>) => {
     setActionError(null);

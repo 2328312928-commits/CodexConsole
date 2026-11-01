@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ApprovalInfo, ModelInfo, PendingQuestion, SessionInfo } from '../../../../shared/api.js';
 import { get, qs } from '../../api';
+import { useSignedInKey } from '../../auth';
 import { ErrorAlert, Spinner } from '../../components/ui';
 import { fmtRelative } from '../../format';
 import { useI18n } from '../../i18n';
@@ -11,6 +12,8 @@ import { SessionView } from './SessionView';
 
 export function ConsolePage() {
   const { t, lang } = useI18n();
+  // Importing Codex sessions reaches folders anywhere on the host: full-console keys only.
+  const canImport = useSignedInKey()?.access !== 'folder';
   const path = usePath();
   const selectedId = /^\/s\/([^/]+)/.exec(path)?.[1] ?? null;
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
@@ -187,12 +190,14 @@ export function ConsolePage() {
             ))}
           </ul>
         )}
-        <div className="sidebar-foot">
-          <button type="button" className="btn small ghost" onClick={() => setDialog('import')}>
-            <Icon name="history" size={15} />
-            {t('sessions.import')}
-          </button>
-        </div>
+        {canImport ? (
+          <div className="sidebar-foot">
+            <button type="button" className="btn small ghost" onClick={() => setDialog('import')}>
+              <Icon name="history" size={15} />
+              {t('sessions.import')}
+            </button>
+          </div>
+        ) : null}
       </aside>
 
       {selected ? (
@@ -208,7 +213,7 @@ export function ConsolePage() {
             void load();
           }}
           onOpenSidebar={() => setSidebarOpen(true)}
-          onImport={() => setDialog('import')}
+          onImport={() => (canImport ? setDialog('import') : undefined)}
         />
       ) : (
         <div className="main">

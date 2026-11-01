@@ -210,4 +210,25 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN extra_settings TEXT;
   `,
+  // v4: sign in to the console with an API key (replaces device pairing). The devices
+  // table stays so older log rows keep their device names.
+  `
+  ALTER TABLE api_keys ADD COLUMN console_access TEXT NOT NULL DEFAULT 'none';
+  DROP TABLE pairing_codes;
+  DROP TABLE login_sessions;
+  CREATE TABLE login_sessions (
+    id TEXT PRIMARY KEY,
+    id_hash TEXT NOT NULL UNIQUE,
+    api_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    admin_verified_at INTEGER,
+    admin_seen_at INTEGER,
+    ip TEXT,
+    user_agent TEXT,
+    revoked_at INTEGER
+  );
+  CREATE INDEX login_sessions_key ON login_sessions(api_key_id);
+  `,
 ];

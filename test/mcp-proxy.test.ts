@@ -2,14 +2,14 @@ import net from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { totpCode } from '../server/auth/totp.js';
 import { parseProxyHeader } from '../server/lib/net.js';
-import { Client, createKey, makeHarness, pairAndLogin, type Harness } from './helpers.js';
+import { Client, createKey, makeHarness, signIn, type Harness } from './helpers.js';
 
 describe('MCP management', () => {
   let h: Harness;
   let admin: Client;
   beforeAll(async () => {
     h = await makeHarness();
-    admin = await pairAndLogin(h);
+    admin = await signIn(h);
   });
   afterAll(async () => {
     await h?.close();
@@ -52,7 +52,7 @@ describe('MCP management', () => {
     await admin.post('/api/auth/admin/lock');
     expect((await admin.get('/api/admin/mcp')).json().error.code).toBe('admin_required');
     // Each authenticator code works once: unlock again with the next one.
-    expect((await admin.post('/api/auth/admin/verify', { code: totpCode(h.totpSecret, Date.now() + 30_000) })).statusCode).toBe(200);
+    expect((await admin.post('/api/auth/admin', { password: h.password, code: totpCode(h.totpSecret, Date.now() + 30_000) })).statusCode).toBe(200);
     const unlocked = admin;
     const reader = await createKey(h, unlocked, { scopes: ['mcp:read'] });
     expect((await reader.client.get('/v1/mcp')).json().servers.map((s: { name: string }) => s.name)).toContain('remote');
@@ -98,7 +98,7 @@ describe('PROXY protocol', () => {
     });
     const h = await makeHarness({ env: { CC_API_PORT: String(port), CC_API_PROXY_PROTOCOL: 'optional' } });
     try {
-      const admin = await pairAndLogin(h);
+      const admin = await signIn(h);
       const { secret, key } = await createKey(h, admin, { ipAllowlist: ['198.51.100.0/24'] });
       await h.publicApi.listen();
       const request = (prefix: Buffer | null, split = false) =>

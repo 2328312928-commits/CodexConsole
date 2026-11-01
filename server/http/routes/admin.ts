@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { REQUEST_STATUSES, SECURITY_EVENT_KINDS, type LoginSessionInfo, type PairingInfo } from '../../../shared/api.js';
+import { REQUEST_STATUSES, SECURITY_EVENT_KINDS, type LoginSessionInfo } from '../../../shared/api.js';
 import { ApiError } from '../../lib/errors.js';
-import { qrSvg } from '../../lib/qr.js';
 import { AdminQueries, type RequestFilter } from '../../services/adminQueries.js';
 import { eventCtx, type AppDeps } from '../context.js';
 import { codexStatus } from './sessions.js';
@@ -14,7 +13,6 @@ const page = z.object({
   offset: z.coerce.number().int().min(0).max(10_000_000).default(0),
 });
 const idParam = z.object({ id: z.string().min(1).max(100) });
-const deviceName = z.string().trim().min(1).max(60);
 
 const requestFilter = page.extend({
   device: z.string().max(100).optional(),
@@ -34,7 +32,7 @@ function csvCell(v: unknown): string {
 }
 
 export function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): void {
-  const { db, devices, logins, audit, settings, bridge, turns, config } = deps;
+  const { db, logins, keys, audit, settings, bridge, turns, config } = deps;
   const queries = new AdminQueries(db);
 
   const toFilter = (q: z.infer<typeof requestFilter>): RequestFilter => ({
@@ -46,16 +44,10 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): void {
     to: q.to,
   });
 
-  async function pairingInfo(deviceId: string, code: string, expiresAt: number): Promise<PairingInfo> {
-    const pairUrl = `${config.publicOrigin}/pair#code=${encodeURIComponent(code)}`;
-    const usage = queries.usageByDevice(Date.now() - 30 * DAY).get(deviceId);
-    return { device: queries.deviceInfo(devices.get(deviceId)!, usage), code, expiresAt, pairUrl, qrSvg: await qrSvg(pairUrl) };
-  }
-
   app.get('/api/admin/overview', ADMIN, async (req) => {
     const { tz } = z.object({ tz: z.coerce.number().int().min(-840).max(840).default(0) }).parse(req.query);
     const now = Date.now();
-    const activeKeys = deps.keys.list(now).filter((k) => deps.keys.status(k, now) === 'active').length;
+    const activeKeys = keys.list(now).filter((k) => keys.status(k, now) === 'active').length;
     const apiRequests24h = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM requests WHERE api_key_id IS NOT NULL AND started_at >= ?', now - DAY)!.n;
     return {
       codex: codexStatus(deps, true),
@@ -67,7 +59,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): void {
         activeKeys,
         requests24h: apiRequests24h,
       },
-      ...queries.overview(tz),
+      ...queries.overview(tz, config.sessions.idleMs),
     };
   });
 
@@ -97,72 +89,31 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): void {
       .send('﻿' + lines.join('\r\n'));
   });
 
-  app.get('/api/admin/devices', ADMIN, async () => {
-    const usage = queries.usageByDevice(Date.now() - 30 * DAY);
-    return { devices: devices.list().map((d) => queries.deviceInfo(d, usage.get(d.id))) };
-  });
-
-  app.post('/api/admin/devices', ADMIN, async (req) => {
-    const body = z.object({ name: deviceName, expiresInDays: z.number().int().min(1).max(3650).nullable().optional() }).strict().parse(req.body);
-    const expiresAt = body.expiresInDays ? Date.now() + body.expiresInDays * DAY : null;
-    const { device, code, codeExpiresAt } = devices.create(body.name, expiresAt);
-    audit.security('device_created', eventCtx(req), { device: device.id, name: device.name });
-    return pairingInfo(device.id, code, codeExpiresAt);
-  });
-
-  app.post('/api/admin/devices/:id/pairing', ADMIN, async (req) => {
-    const { id } = idParam.parse(req.params);
-    const d = devices.get(id);
-    if (!d) throw new ApiError(404, 'device_not_found');
-    if (d.revoked_at !== null) throw new ApiError(409, 'bad_request', 'device revoked');
-    const { code, expiresAt } = devices.issuePairingCode(id);
-    audit.security('device_pairing_code', eventCtx(req), { device: id });
-    return pairingInfo(id, code, expiresAt);
-  });
-
-  app.patch('/api/admin/devices/:id', ADMIN, async (req) => {
-    const { id } = idParam.parse(req.params);
-    const body = z.object({ name: deviceName.optional(), expiresAt: z.number().int().nullable().optional() }).strict().parse(req.body);
-    if (!devices.get(id)) throw new ApiError(404, 'device_not_found');
-    if (body.name !== undefined) {
-      devices.rename(id, body.name);
-      audit.security('device_renamed', eventCtx(req), { device: id, name: body.name });
-    }
-    if (body.expiresAt !== undefined) {
-      devices.setExpiry(id, body.expiresAt);
-      audit.security('device_expiry_changed', eventCtx(req), { device: id, expiresAt: body.expiresAt });
-    }
-    return { device: queries.deviceInfo(devices.get(id)!, queries.usageByDevice(Date.now() - 30 * DAY).get(id)) };
-  });
-
-  app.post('/api/admin/devices/:id/revoke', ADMIN, async (req) => {
-    const { id } = idParam.parse(req.params);
-    if (!devices.get(id)) throw new ApiError(404, 'device_not_found');
-    devices.revoke(id);
-    audit.security('device_revoked', eventCtx(req), { device: id, self: id === req.auth.device!.id });
-    return { ok: true };
-  });
-
+  // Browsers signed in to the console right now, and the key each one used.
   app.get('/api/admin/logins', ADMIN, async (req) => {
-    const names = new Map(devices.list().map((d) => [d.id, d.name]));
-    const rows: LoginSessionInfo[] = logins.listActive().map((l) => ({
-      id: l.id,
-      deviceId: l.device_id,
-      deviceName: names.get(l.device_id) ?? null,
-      createdAt: l.created_at,
-      lastSeenAt: l.last_seen_at,
-      expiresAt: l.expires_at,
-      ip: l.ip,
-      userAgent: l.user_agent,
-      admin: logins.isAdmin(l),
-      current: l.id === req.auth.login!.id,
-    }));
+    const { key } = z.object({ key: z.string().max(100).optional() }).parse(req.query);
+    const labels = new Map(keys.list().map((k) => [k.id, k.label]));
+    const rows: LoginSessionInfo[] = logins
+      .listActive()
+      .filter((l) => !key || l.api_key_id === key)
+      .map((l) => ({
+        id: l.id,
+        apiKeyId: l.api_key_id,
+        apiKeyLabel: labels.get(l.api_key_id) ?? null,
+        createdAt: l.created_at,
+        lastSeenAt: l.last_seen_at,
+        expiresAt: l.expires_at,
+        ip: l.ip,
+        userAgent: l.user_agent,
+        admin: logins.isAdmin(l),
+        current: l.id === req.auth.login!.id,
+      }));
     return { logins: rows };
   });
 
   app.post('/api/admin/logins/:id/revoke', ADMIN, async (req) => {
     const { id } = idParam.parse(req.params);
-    logins.revoke(id);
+    if (!logins.revoke(id)) throw new ApiError(404, 'not_found');
     audit.security('login_session_revoked', eventCtx(req), { session: id });
     return { ok: true };
   });

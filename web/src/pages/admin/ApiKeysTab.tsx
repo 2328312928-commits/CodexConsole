@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import {
   API_KEY_SCOPES,
+  CONSOLE_ACCESS,
   DANGEROUS_SCOPES,
   QUOTA_PERIODS,
   type ApiKeyInfo,
@@ -8,7 +9,9 @@ import {
   type ApiKeyScope,
   type ApiKeySecret,
   type ApiKeyUsage,
+  type ConsoleAccess,
   type KeyApprovals,
+  type LoginSessionInfo,
   type QuotaPeriod,
 } from '../../../../shared/api.js';
 import type { SandboxMode } from '../../../../shared/codex.js';
@@ -16,6 +19,7 @@ import { patch, post } from '../../api';
 import { limitSeverity } from '../../codexStatus';
 import { ConfirmDialog, CopyButton, ErrorAlert, Modal, Spinner } from '../../components/ui';
 import { fmtBytes, fmtCompact, fmtDateTime, fmtDuration, fmtNumber, fmtRelative } from '../../format';
+import { useSignedInKey } from '../../auth';
 import { useI18n } from '../../i18n';
 import { Icon } from '../../icons';
 import { navigate } from '../../router';
@@ -25,11 +29,12 @@ import { statusTone } from './RequestsTab';
 
 const SANDBOXES: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
 const EXPIRY_DAYS = [7, 30, 90, 365];
-const DEFAULT_LIMITS: ApiKeyLimits = { perMinute: 60, promptsPerMinute: 6, concurrent: 2, uploadMbPerHour: 500 };
+const DEFAULT_LIMITS: ApiKeyLimits = { perMinute: 600, promptsPerMinute: 20, concurrent: 4, uploadMbPerHour: 2048 };
 const DANGER = new Set<ApiKeyScope>(DANGEROUS_SCOPES);
 
 interface KeyForm {
   label: string;
+  consoleAccess: ConsoleAccess;
   scopes: ApiKeyScope[];
   quotaTokens: string;
   quotaPeriod: QuotaPeriod;
@@ -43,16 +48,18 @@ interface KeyForm {
   folder: string;
 }
 
+/** A new key is for one of your devices: the whole console, nothing capped, no quota or expiry. */
 function blankForm(): KeyForm {
   return {
     label: '',
-    scopes: ['prompt', 'sessions', 'files:read', 'files:write'],
-    quotaTokens: '1000000',
+    consoleAccess: 'full',
+    scopes: [],
+    quotaTokens: '',
     quotaPeriod: 'month',
-    expiry: '90',
-    maxSandbox: 'workspace-write',
-    allowNetwork: false,
-    approvals: 'deny',
+    expiry: 'never',
+    maxSandbox: 'danger-full-access',
+    allowNetwork: true,
+    approvals: 'ask',
     limits: { ...DEFAULT_LIMITS },
     ipAllowlist: '',
     folder: '',
@@ -62,6 +69,7 @@ function blankForm(): KeyForm {
 function formFromKey(k: ApiKeyInfo): KeyForm {
   return {
     label: k.label,
+    consoleAccess: k.consoleAccess,
     scopes: k.scopes,
     quotaTokens: k.quota.tokens === null ? '' : String(k.quota.tokens),
     quotaPeriod: k.quota.period,
@@ -79,29 +87,31 @@ function keyTone(s: ApiKeyInfo['status']): string {
   return s === 'active' ? 'good' : s === 'expired' ? 'warn' : 'bad';
 }
 
-/** Explains what keys are for and whether the public listener is on. */
-function ApiStatus({ api }: { api: { enabled: boolean; baseUrl: string } }) {
+/** Where your devices sign in, and where scripts call the API. */
+function KeysHeader({ consoleUrl, api }: { consoleUrl: string; api: { enabled: boolean; baseUrl: string } }) {
   const { t } = useI18n();
   return (
-    <section className="card" style={{ marginBottom: 16 }}>
-      <h2 className="section-title">
-        <Icon name="globe" /> {t('keys.publicApi')}
-        <span className={`badge ${api.enabled ? 'good' : ''}`}>{api.enabled ? t('keys.apiOn') : t('keys.apiOff')}</span>
-      </h2>
-      <p className="muted" style={{ marginTop: 0 }}>
-        {t('keys.intro')}
-      </p>
-      {api.enabled ? (
-        <div className="row">
-          <code className="url-box">{`${api.baseUrl}/v1`}</code>
-          <CopyButton text={`${api.baseUrl}/v1`} />
-        </div>
-      ) : (
-        <div className="alert">
-          <Icon name="info" />
-          <div>{t('keys.apiOffHint')}</div>
-        </div>
-      )}
+    <section className="card keys-header" style={{ marginBottom: 16 }}>
+      <div className="row">
+        <span className="label-text">
+          <Icon name="terminal" size={15} /> {t('keys.consoleUrl')}
+        </span>
+        <code className="url-box">{consoleUrl}</code>
+        <CopyButton text={consoleUrl} />
+      </div>
+      <div className="row">
+        <span className="label-text">
+          <Icon name="globe" size={15} /> {t('keys.publicApi')}
+        </span>
+        {api.enabled ? (
+          <>
+            <code className="url-box">{`${api.baseUrl}/v1`}</code>
+            <CopyButton text={`${api.baseUrl}/v1`} />
+          </>
+        ) : (
+          <span className="muted">{t('keys.apiOffHint')}</span>
+        )}
+      </div>
     </section>
   );
 }
@@ -153,6 +163,7 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
     setError(null);
     const settings = {
       label: form.label.trim(),
+      consoleAccess: form.consoleAccess,
       scopes: API_KEY_SCOPES.filter((s) => form.scopes.includes(s)),
       quotaTokens: form.quotaTokens.trim() ? Number(form.quotaTokens) : null,
       quotaPeriod: form.quotaPeriod,
@@ -205,6 +216,17 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
                 </option>
               ))}
             </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <span className="label-text">{t('keys.consoleAccess')}</span>
+          <div className="seg-ctl" role="radiogroup" aria-label={t('keys.consoleAccess')}>
+            {[...CONSOLE_ACCESS].reverse().map((a) => (
+              <button key={a} type="button" role="radio" aria-checked={form.consoleAccess === a} onClick={() => set('consoleAccess', a)}>
+                {t(`keys.console.${a}`)}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -314,7 +336,7 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
           <button type="button" className="btn" onClick={onClose}>
             {t('common.cancel')}
           </button>
-          <button type="submit" className="btn primary" disabled={busy || !form.label.trim() || form.scopes.length === 0}>
+          <button type="submit" className="btn primary" disabled={busy || !form.label.trim() || (form.consoleAccess === 'none' && form.scopes.length === 0)}>
             {edit ? t('common.save') : t('keys.create')}
           </button>
         </div>
@@ -325,6 +347,8 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
 
 function SecretDialog({ secret, onClose }: { secret: ApiKeySecret; onClose: () => void }) {
   const { t } = useI18n();
+  const forConsole = secret.key.consoleAccess !== 'none';
+  const forApi = secret.key.scopes.length > 0;
   const base = `${secret.baseUrl}/v1`;
   const auth = '-H "Authorization: Bearer $CODEX_CONSOLE_KEY"';
   const json = "-H 'Content-Type: application/json'";
@@ -356,16 +380,29 @@ function SecretDialog({ secret, onClose }: { secret: ApiKeySecret; onClose: () =
           <CopyButton text={secret.secret} />
         </div>
       </div>
-      <h3 className="section-title" style={{ marginTop: 14 }}>
-        {t('keys.example')}
-      </h3>
-      <pre className="log">{example}</pre>
-      <div className="row">
-        <CopyButton text={example} />
-        <span className="muted" style={{ fontSize: 13 }}>
-          {t('keys.exampleHint')}
-        </span>
-      </div>
+      {forConsole ? (
+        <div className="field">
+          <span className="label-text">{t('keys.signInAt')}</span>
+          <div className="row">
+            <code className="url-box">{secret.consoleUrl}</code>
+            <CopyButton text={secret.consoleUrl} />
+          </div>
+        </div>
+      ) : null}
+      {forApi ? (
+        <>
+          <h3 className="section-title" style={{ marginTop: 14 }}>
+            {t('keys.example')}
+          </h3>
+          <pre className="log">{example}</pre>
+          <div className="row">
+            <CopyButton text={example} />
+            <span className="muted" style={{ fontSize: 13 }}>
+              {t('keys.exampleHint')}
+            </span>
+          </div>
+        </>
+      ) : null}
     </Modal>
   );
 }
@@ -512,9 +549,104 @@ function UsageDialog({ k, onClose, onAdminLost }: { k: ApiKeyInfo; onClose: () =
   );
 }
 
+/** Browsers signed in to the console right now, with the key each one used. */
+function SignIns({ logins, reload, onError }: { logins: LoginSessionInfo[] | null; reload: () => void; onError: (e: unknown) => void }) {
+  const { t, lang } = useI18n();
+  const [notice, setNotice] = useState<string | null>(null);
+  return (
+    <section style={{ marginTop: 24 }}>
+      <div className="row" style={{ marginBottom: 10 }}>
+        <h2 className="section-title" style={{ margin: 0 }}>
+          <Icon name="key" /> {t('signins.title')}
+        </h2>
+        <span className="spacer" />
+        {logins && logins.some((l) => !l.current) ? (
+          <button
+            type="button"
+            className="btn small"
+            onClick={async () => {
+              try {
+                const res = await post<{ revoked: number }>('/api/admin/logins/revoke-others');
+                setNotice(t('signins.ended', { count: res.revoked }));
+                reload();
+              } catch (err) {
+                onError(err);
+              }
+            }}
+          >
+            {t('signins.endOthers')}
+          </button>
+        ) : null}
+      </div>
+      {notice ? (
+        <div className="alert" role="status" style={{ marginBottom: 10 }}>
+          <Icon name="check" />
+          {notice}
+        </div>
+      ) : null}
+      {!logins ? (
+        <Spinner />
+      ) : logins.length === 0 ? (
+        <p className="empty">{t('signins.empty')}</p>
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>{t('signins.key')}</th>
+                <th>{t('signins.lastSeen')}</th>
+                <th>{t('requests.ip')}</th>
+                <th>{t('signins.browser')}</th>
+                <th>
+                  <span className="sr-only">{t('keys.actions')}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {logins.map((l) => (
+                <tr key={l.id}>
+                  <td>
+                    {l.apiKeyLabel ?? l.apiKeyId} {l.current ? <span className="badge info">{t('signins.current')}</span> : null}{' '}
+                    {l.admin ? <span className="badge warn">{t('signins.admin')}</span> : null}
+                  </td>
+                  <td className="nowrap">{fmtRelative(lang, t, l.lastSeenAt)}</td>
+                  <td className="mono nowrap">{l.ip ?? '—'}</td>
+                  <td className="clip" title={l.userAgent ?? undefined}>
+                    {l.userAgent ?? '—'}
+                  </td>
+                  <td>
+                    {!l.current ? (
+                      <button
+                        type="button"
+                        className="btn small danger"
+                        onClick={async () => {
+                          try {
+                            await post(`/api/admin/logins/${l.id}/revoke`);
+                            reload();
+                          } catch (err) {
+                            onError(err);
+                          }
+                        }}
+                      >
+                        {t('signins.end')}
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
   const { t, lang } = useI18n();
-  const { data, error, reload } = useAdminData<{ keys: ApiKeyInfo[]; api: { enabled: boolean; baseUrl: string } }>('/api/admin/api-keys', onAdminLost, 20_000);
+  const me = useSignedInKey();
+  const { data, error, reload } = useAdminData<{ keys: ApiKeyInfo[]; api: { enabled: boolean; baseUrl: string }; console: { url: string } }>('/api/admin/api-keys', onAdminLost, 20_000);
+  const logins = useAdminData<{ logins: LoginSessionInfo[] }>('/api/admin/logins', onAdminLost, 20_000);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ApiKeyInfo | null>(null);
   const [rotating, setRotating] = useState<ApiKeyInfo | null>(null);
@@ -522,13 +654,18 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
   const [usage, setUsage] = useState<ApiKeyInfo | null>(null);
   const [secret, setSecret] = useState<ApiKeySecret | null>(null);
   const [showRevoked, setShowRevoked] = useState(false);
+  const [actionError, setActionError] = useState<unknown>(null);
+  const reloadAll = () => {
+    void reload();
+    void logins.reload();
+  };
 
   if (!data) return error ? <ErrorAlert error={error} /> : <Spinner />;
   const keys = data.keys.filter((k) => showRevoked || k.status !== 'revoked');
   const revokedCount = data.keys.filter((k) => k.status === 'revoked').length;
   return (
     <div>
-      <ApiStatus api={data.api} />
+      <KeysHeader consoleUrl={data.console.url} api={data.api} />
       <div className="toolbar">
         <button type="button" className="btn primary" onClick={() => setCreating(true)}>
           <Icon name="plus" size={16} />
@@ -541,7 +678,7 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
           </label>
         ) : null}
       </div>
-      <ErrorAlert error={error} />
+      <ErrorAlert error={error ?? actionError} />
       {keys.length === 0 ? (
         <p className="empty">{t('keys.empty')}</p>
       ) : (
@@ -551,8 +688,9 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
               <tr>
                 <th>{t('keys.label')}</th>
                 <th>{t('devices.status')}</th>
-                <th>{t('keys.quota')}</th>
+                <th>{t('keys.consoleAccess')}</th>
                 <th>{t('keys.scopes')}</th>
+                <th>{t('keys.quota')}</th>
                 <th>{t('devices.lastUsed')}</th>
                 <th>{t('devices.usage30d')}</th>
                 <th>
@@ -583,20 +721,32 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
                     ) : null}
                   </td>
                   <td>
-                    <QuotaMeter k={k} />
-                  </td>
-                  <td>
-                    <div className="tag-list">
-                      {k.scopes.map((s) => (
-                        <span key={s} className={`badge ${DANGER.has(s) ? 'warn' : ''}`}>
-                          {s}
-                        </span>
-                      ))}
-                    </div>
+                    <span className={`badge ${k.consoleAccess === 'full' ? 'good' : k.consoleAccess === 'folder' ? 'info' : ''}`}>{t(`keys.console.${k.consoleAccess}`)}</span>
+                    {k.signIns > 0 ? (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                        {t('keys.signIns', { count: k.signIns })}
+                      </div>
+                    ) : null}
                     <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                       {t(`sandbox.${k.maxSandbox}`)} · {k.allowNetwork ? t('keys.networkYes') : t('keys.networkNo')} ·{' '}
                       {k.approvals === 'deny' ? t('keys.approvalsDenyShort') : t('keys.approvalsAskShort')}
                     </div>
+                  </td>
+                  <td>
+                    {k.scopes.length ? (
+                      <div className="tag-list">
+                        {k.scopes.map((sc) => (
+                          <span key={sc} className={`badge ${DANGER.has(sc) ? 'warn' : ''}`}>
+                            {sc}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td>
+                    <QuotaMeter k={k} />
                   </td>
                   <td className="nowrap">
                     <div>{k.lastUsedAt ? fmtRelative(lang, t, k.lastUsedAt) : t('common.never')}</div>
@@ -639,6 +789,8 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
         </div>
       )}
 
+      <SignIns logins={logins.data?.logins ?? null} reload={reloadAll} onError={setActionError} />
+
       {creating || editing ? (
         <KeyFormDialog
           edit={editing}
@@ -649,11 +801,11 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
           onCreated={(s) => {
             setCreating(false);
             setSecret(s);
-            void reload();
+            reloadAll();
           }}
           onSaved={() => {
             setEditing(null);
-            void reload();
+            reloadAll();
           }}
         />
       ) : null}
@@ -664,7 +816,7 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
           onRotated={(s) => {
             setRotating(null);
             setSecret(s);
-            void reload();
+            reloadAll();
           }}
         />
       ) : null}
@@ -677,9 +829,16 @@ export function ApiKeysTab({ onAdminLost }: { onAdminLost: () => void }) {
           onClose={() => setRevoking(null)}
           onConfirm={async () => {
             await post(`/api/admin/api-keys/${revoking.id}/revoke`);
-            void reload();
+            reloadAll();
           }}
-        />
+        >
+          {revoking.id === me?.id ? (
+            <div className="alert warn">
+              <Icon name="alert" />
+              {t('keys.revokeSelf')}
+            </div>
+          ) : null}
+        </ConfirmDialog>
       ) : null}
       {usage ? <UsageDialog k={usage} onClose={() => setUsage(null)} onAdminLost={onAdminLost} /> : null}
       {secret ? <SecretDialog secret={secret} onClose={() => setSecret(null)} /> : null}

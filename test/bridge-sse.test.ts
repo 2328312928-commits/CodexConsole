@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RpcError } from '../server/codex/rpc.js';
-import { Client, makeHarness, pairAndLogin, waitForEvent, type Harness } from './helpers.js';
+import { Client, makeHarness, signIn, waitForEvent, type Harness } from './helpers.js';
 
 let h: Harness | null = null;
 afterEach(async () => {
@@ -24,7 +24,7 @@ describe('Codex process supervision', () => {
 
   it('fails a running turn cleanly when Codex dies mid-turn', async () => {
     h = await makeHarness();
-    const client = await pairAndLogin(h);
+    const client = await signIn(h);
     const s = (await client.post('/api/sessions', {})).json().session;
     const streaming = waitForEvent(h, s.id, 'item_delta');
     await client.post(`/api/sessions/${s.id}/turns`, { text: 'slow' });
@@ -43,7 +43,7 @@ describe('Codex process supervision', () => {
 describe('server-sent events', () => {
   it('streams a snapshot and live events to an authenticated browser only', async () => {
     h = await makeHarness();
-    const client = await pairAndLogin(h);
+    const client = await signIn(h);
     const s = (await client.post('/api/sessions', {})).json().session;
     await h.app.listen({ port: 0, host: '127.0.0.1' });
     const port = (h.app.server.address() as AddressInfo).port;

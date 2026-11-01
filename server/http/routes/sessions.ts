@@ -1,11 +1,11 @@
-import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   APPROVAL_DECISIONS,
   REASONING_SUMMARIES,
+  SAFE_APPROVAL_DECISIONS,
   WEB_SEARCH_MODES,
   type ApprovalDecision,
   type CodexStatusInfo,
@@ -13,14 +13,17 @@ import {
   type ServerEvent,
 } from '../../../shared/api.js';
 import { TESTED_CODEX_VERSION, type UserInput } from '../../../shared/codex.js';
-import type { LoginSessionRow } from '../../auth/loginSessions.js';
 import type { SessionRow } from '../../services/sessions.js';
 import { runCommand } from '../../codex/commands.js';
 import { TurnManager, type Attachment } from '../../codex/turns.js';
+import { promptBucket, type ApiKey } from '../../auth/apiKeys.js';
 import { ApiError } from '../../lib/errors.js';
-import type { Workspace } from '../../services/workspace.js';
-import { eventCtx, type AppDeps } from '../context.js';
+import { defaultFolderName, type Workspace } from '../../services/workspace.js';
+import { clientIp, eventCtx, keyCanAllow, type AppDeps } from '../context.js';
 import { CSP } from '../headers.js';
+import { ConsoleScope } from '../scope.js';
+
+export { defaultFolderName };
 
 const idParam = z.object({ id: z.string().min(1).max(100) });
 const SSE_PING_MS = 15_000;
@@ -100,18 +103,6 @@ export function codexStatus(deps: AppDeps, includeEmail = false): CodexStatusInf
   };
 }
 
-/** A readable, unique folder name for a new session. */
-export function defaultFolderName(title: string | undefined, now = new Date()): string {
-  const slug = (title ?? '')
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  const date = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const suffix = crypto.randomBytes(3).toString('hex');
-  return `${slug || 'session'}-${date}-${suffix}`;
-}
 
 /** Create a session folder (inside `ws`) and return its absolute path. */
 export async function makeSessionFolder(ws: Workspace, rel: string): Promise<string> {
@@ -150,7 +141,8 @@ export async function buildPromptInput(
 }
 
 export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void {
-  const { sessions, turns, bridge, workspace, config, limiter, requests, audit, media, devices, db, ops, mcp, queue } = deps;
+  const { sessions, turns, bridge, workspace, config, limiter, requests, audit, media, keys, logins, ops, mcp, queue } = deps;
+  const scopeOf = (req: FastifyRequest) => ConsoleScope.of(deps, req);
 
   /** Sending a prompt to an archived session brings it (and its Codex thread) back. */
   const unarchive = async (s: SessionRow) => {
@@ -160,24 +152,44 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
     turns.emitSessionUpdated(s.id);
   };
 
-  const getSession = (id: string) => {
-    const s = sessions.get(id);
-    if (!s) throw new ApiError(404, 'session_not_found');
-    return s;
+  const newConsoleSession = async (scope: ConsoleScope, title: string, folder?: string) => {
+    const abs = await makeSessionFolder(await scope.workspace(), folder?.trim() || defaultFolderName(title));
+    return sessions.create({ title, titleAuto: !title, cwd: abs, deviceId: null, apiKeyId: scope.key.id });
   };
 
-  const newConsoleSession = async (title: string, deviceId: string, folder?: string) => {
-    const abs = await makeSessionFolder(workspace, folder?.trim() || defaultFolderName(title));
-    return sessions.create({ title, titleAuto: !title, cwd: abs, deviceId });
+  const fullOnly = (scope: ConsoleScope, what: string) => {
+    if (!scope.full) throw new ApiError(403, 'setting_not_allowed', `${what} needs a key with full console access`);
+  };
+
+  /** One prompt budget per key, shared by prompts sent now, queued prompts and the public API. */
+  const takePromptBudget = (req: FastifyRequest, key: ApiKey) => {
+    const limited = limiter.consume(promptBucket(key), Math.min(key.limits.promptsPerMinute, config.limits.promptsPerMinute), 60_000);
+    if (limited.ok) return;
+    audit.security('rate_limited', eventCtx(req), { scope: 'prompt' });
+    throw new ApiError(429, 'rate_limited', undefined, Math.ceil(limited.retryAfterMs / 1000));
+  };
+
+  // Shell commands run outside Codex's sandbox with the service's full rights, so they would
+  // lift any cap: only a key with full access and network may run them.
+  const assertShellAllowed = (scope: ConsoleScope) => {
+    if (!keyCanAllow(scope.key)) throw new ApiError(403, 'setting_not_allowed', 'shell commands run outside the sandbox: they need a key with full access and network');
+  };
+
+  // Codex downloads image links itself, outside the sandbox: that is network access.
+  const checkImageLinks = (scope: ConsoleScope, imageUrls: string[]) => {
+    if (imageUrls.length > 0 && scope.caps && !scope.caps.allowNetwork) {
+      throw new ApiError(403, 'setting_not_allowed', 'image links need network access, which this key does not allow');
+    }
   };
 
   app.get('/api/codex/status', async () => codexStatus(deps));
   app.get('/api/codex/models', async () => ({ models: await ops.models() }));
 
   app.get('/api/sessions', async (req) => {
+    const scope = scopeOf(req);
     const q = z.object({ archived: z.enum(['0', '1']).optional(), q: z.string().max(200).optional() }).parse(req.query);
-    const rows = sessions.list({ archived: q.archived === '1', q: q.q?.trim() || undefined });
-    return { sessions: rows.map((r) => sessions.toInfo(r, turns.isRunning(r.id))), workspaceRoot: workspace.realRoot };
+    const rows = sessions.list({ archived: q.archived === '1', q: q.q?.trim() || undefined, apiKeyId: scope.full ? undefined : scope.key.id });
+    return { sessions: rows.map((r) => scope.info(r)), workspaceRoot: scope.rootAbs() };
   });
 
   app.post('/api/sessions', async (req) => {
@@ -185,11 +197,14 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
       .object({ title: z.string().max(200).optional(), folder: z.string().max(1000).optional() })
       .strict()
       .parse(req.body ?? {});
-    const row = await newConsoleSession(body.title?.trim() ?? '', req.auth.device!.id, body.folder);
-    return { session: sessions.toInfo(row, false) };
+    const scope = scopeOf(req);
+    const row = await newConsoleSession(scope, body.title?.trim() ?? '', body.folder);
+    return { session: scope.info(row) };
   });
 
   app.post('/api/sessions/import', async (req) => {
+    const scope = scopeOf(req);
+    fullOnly(scope, 'importing Codex sessions');
     const { threadId } = z.object({ threadId: z.string().min(1).max(100) }).strict().parse(req.body);
     if (sessions.getByThread(threadId)) throw new ApiError(409, 'thread_already_imported');
     const thread = await turns.readThread(threadId).catch(() => {
@@ -200,16 +215,18 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
       title: name || thread.preview.replace(/\s+/g, ' ').trim().slice(0, 80),
       titleAuto: !name,
       cwd: thread.cwd,
-      deviceId: req.auth.device!.id,
+      deviceId: null,
+      apiKeyId: scope.key.id,
       threadId,
       model: thread.model,
       imported: true,
     });
     await turns.syncHistory(row).catch((err) => req.log.warn({ err: err.message }, 'Thread history import failed'));
-    return { session: sessions.toInfo(sessions.get(row.id)!, false) };
+    return { session: scope.info(sessions.get(row.id)!) };
   });
 
   app.get('/api/codex/threads', async (req) => {
+    fullOnly(scopeOf(req), 'importing Codex sessions');
     const { cursor } = z.object({ cursor: z.string().max(500).optional() }).parse(req.query);
     const res = await turns.listImportable(cursor ?? null).catch((err) => {
       throw new ApiError(502, 'codex_error', (err as Error).message);
@@ -230,12 +247,14 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
   });
 
   app.get('/api/sessions/:id', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
-    return { session: ops.info(s), effective: ops.effective(s), turn: turns.snapshot(s.id) };
+    const scope = scopeOf(req);
+    const s = scope.session(idParam.parse(req.params).id);
+    return { session: scope.info(s), effective: ops.effective(s, scope.caps), turn: scope.paths(turns.snapshot(s.id)) };
   });
 
   app.patch('/api/sessions/:id', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const body = z
       .object({
         title: z.string().max(200).optional(),
@@ -247,25 +266,29 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
       .parse(req.body);
     if (body.title !== undefined) await ops.rename(s, body.title);
     if (body.archived !== undefined) await ops.archive(s, body.archived);
-    if (body.model !== undefined || body.effort !== undefined) ops.updateSettings(s, { model: body.model, effort: body.effort });
+    if (body.model !== undefined || body.effort !== undefined) ops.updateSettings(s, { model: body.model, effort: body.effort }, scope.caps);
     turns.emitSessionUpdated(s.id);
-    return { session: ops.info(sessions.get(s.id)!) };
+    return { session: scope.info(sessions.get(s.id)!) };
   });
 
   app.patch('/api/sessions/:id/settings', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const body = settingsBody.parse(req.body);
+    // A folder key works only in its own folder.
+    if (body.writableRoots?.length && !scope.full) throw new ApiError(403, 'setting_not_allowed', 'extra writable folders need a key with full console access');
     if (body.writableRoots !== undefined) body.writableRoots = await ops.checkWritableRoots(body.writableRoots);
-    const row = ops.updateSettings(s, body);
-    return { session: ops.info(row), effective: ops.effective(row) };
+    const row = ops.updateSettings(s, body, scope.caps);
+    return { session: scope.info(row), effective: ops.effective(row, scope.caps) };
   });
 
   // ---- queue: prompts sent while Codex is busy ----
 
-  app.get('/api/sessions/:id/queue', async (req) => queue.list(getSession(idParam.parse(req.params).id).id));
+  app.get('/api/sessions/:id/queue', async (req) => queue.list(scopeOf(req).session(idParam.parse(req.params).id).id));
 
   app.post('/api/sessions/:id/queue', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const body = z
       .object({
         text: z.string().max(config.limits.maxPromptChars * 4),
@@ -278,41 +301,44 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
       .parse(req.body);
     if (!body.text.trim() && body.attachments.length + body.mentions.length + body.skills.length + body.imageUrls.length === 0) throw new ApiError(400, 'prompt_empty');
     if ([...body.text].length > config.limits.maxPromptChars) throw new ApiError(413, 'prompt_too_long');
-    const { attachments, extra } = await buildPromptInput(workspace, body);
+    checkImageLinks(scope, body.imageUrls);
+    takePromptBudget(req, scope.key);
+    const { attachments, extra } = await buildPromptInput(await scope.workspace(), body);
     extra.push(...(await ops.skillInputs(s.cwd, body.skills)));
-    return { queued: queue.add(s.id, { text: body.text, attachments, extraInput: extra, keyId: null, ctx: eventCtx(req) }) };
+    return { queued: queue.add(s.id, { text: body.text, attachments, extraInput: extra, keyId: scope.key.id, channel: 'console', ctx: eventCtx(req) }) };
   });
 
   app.delete('/api/sessions/:id/queue/:itemId', async (req) => {
     const { id, itemId } = z.object({ id: idParam.shape.id, itemId: z.string().max(100) }).parse(req.params);
-    queue.remove(getSession(id).id, itemId);
+    queue.remove(scopeOf(req).actSession(id).id, itemId);
     return { ok: true };
   });
 
   app.post('/api/sessions/:id/queue/resume', async (req) => {
-    queue.resume(getSession(idParam.parse(req.params).id).id);
+    queue.resume(scopeOf(req).actSession(idParam.parse(req.params).id).id);
     return { ok: true };
   });
 
   // ---- background terminals (`/ps`, `/stop`) ----
 
-  app.get('/api/sessions/:id/terminals', async (req) => ({ terminals: await ops.terminals(getSession(idParam.parse(req.params).id)) }));
+  app.get('/api/sessions/:id/terminals', async (req) => ({ terminals: await ops.terminals(scopeOf(req).session(idParam.parse(req.params).id)) }));
 
   app.post('/api/sessions/:id/terminals/stop', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const s = scopeOf(req).actSession(idParam.parse(req.params).id);
     const { processId } = z.object({ processId: z.string().max(200).nullable() }).strict().parse(req.body);
     await ops.stopTerminal(s, processId);
     return { ok: true };
   });
 
   app.post('/api/sessions/:id/folder', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const { path: rel } = z.object({ path: z.string().max(4096) }).strict().parse(req.body);
-    return { session: ops.info(await ops.changeFolder(s, rel)) };
+    return { session: scope.info(await ops.changeFolder(s, rel, await scope.workspace())) };
   });
 
   app.post('/api/sessions/:id/feedback', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const s = scopeOf(req).actSession(idParam.parse(req.params).id);
     const body = feedbackBody.parse(req.body);
     await ops.feedback(s, { classification: body.classification, reason: body.reason ?? null, includeLogs: body.includeLogs }, eventCtx(req));
     return { ok: true };
@@ -320,14 +346,17 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
 
   app.post('/api/sessions/:id/reviews/:reviewId/approve', async (req) => {
     const { id, reviewId } = z.object({ id: idParam.shape.id, reviewId: z.string().max(200) }).parse(req.params);
-    await turns.approveDenied(getSession(id).id, reviewId, eventCtx(req));
+    const scope = scopeOf(req);
+    const s = scope.actSession(id);
+    if (!keyCanAllow(scope.key)) throw new ApiError(403, 'setting_not_allowed', 'this key can only decline');
+    await turns.approveDenied(s.id, reviewId, eventCtx(req));
     return { ok: true };
   });
 
   app.get('/api/codex/prompts', async () => ({ prompts: await ops.savedPrompts() }));
 
   app.delete('/api/sessions/:id', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const s = scopeOf(req).actSession(idParam.parse(req.params).id);
     const { archiveThread, deleteThread } = z.object({ archiveThread: z.enum(['0', '1']).optional(), deleteThread: z.enum(['0', '1']).optional() }).parse(req.query);
     if (turns.isRunning(s.id)) throw new ApiError(409, 'turn_in_progress');
     if (deleteThread === '1' && s.thread_id) await bridge.request('thread/delete', { threadId: s.thread_id }).catch(() => undefined);
@@ -339,15 +368,16 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
   });
 
   app.get('/api/sessions/:id/history', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.session(idParam.parse(req.params).id);
     const q = z
       .object({ before: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(2000).optional() })
       .parse(req.query);
-    return sessions.history(s.id, { beforeId: q.before, limit: q.limit });
+    return scope.paths(sessions.history(s.id, { beforeId: q.before, limit: q.limit }));
   });
 
   app.post('/api/sessions/:id/sync', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const s = scopeOf(req).session(idParam.parse(req.params).id);
     if (turns.isRunning(s.id)) throw new ApiError(409, 'turn_in_progress');
     const imported = await turns.syncHistory(s).catch((err) => {
       throw new ApiError(502, 'codex_error', (err as Error).message);
@@ -356,7 +386,8 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
   });
 
   app.post('/api/sessions/:id/turns', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const body = z
       .object({
         text: z.string().max(config.limits.maxPromptChars * 4),
@@ -372,139 +403,193 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
     if (empty) throw new ApiError(400, 'prompt_empty');
     if ([...body.text].length > config.limits.maxPromptChars) throw new ApiError(413, 'prompt_too_long');
 
-    const device = req.auth.device!;
-    const limited = limiter.consume(`prompt:dev:${device.id}`, config.limits.promptsPerMinute, 60_000);
+    const key = scope.key;
+    const limited = limiter.consume(promptBucket(key), Math.min(key.limits.promptsPerMinute, config.limits.promptsPerMinute), 60_000);
     if (!limited.ok) {
       requests.start({
         sessionId: s.id,
         sessionTitle: s.title,
-        deviceId: device.id,
+        deviceId: null,
+        apiKeyId: key.id,
         threadId: s.thread_id,
         prompt: body.text,
         attachmentCount: body.attachments.length,
         attachmentBytes: 0,
         model: body.model ?? s.model,
         effort: body.effort ?? s.effort,
-        ip: req.ip,
+        ip: clientIp(req),
         status: 'rate_limited',
       });
       audit.security('rate_limited', eventCtx(req), { scope: 'prompt' });
       throw new ApiError(429, 'rate_limited', undefined, Math.ceil(limited.retryAfterMs / 1000));
     }
+    if (turns.runningForKey(key.id) >= key.limits.concurrent) throw new ApiError(429, 'too_many_turns');
+    checkImageLinks(scope, body.imageUrls);
 
-    const { attachments, extra } = await buildPromptInput(workspace, body);
+    const { attachments, extra } = await buildPromptInput(await scope.workspace(), body);
     extra.push(...(await ops.skillInputs(s.cwd, body.skills)));
     await ops.warm();
     let session = s;
     const { model, effort, summary, serviceTier, mode } = body;
-    if ([model, effort, summary, serviceTier, mode].some((v) => v !== undefined)) session = ops.updateSettings(s, { model, effort, summary, serviceTier, mode });
+    if ([model, effort, summary, serviceTier, mode].some((v) => v !== undefined)) session = ops.updateSettings(s, { model, effort, summary, serviceTier, mode }, scope.caps);
     if (session.archived_at !== null) await unarchive(session);
-    return turns.startTurn({ session, ctx: eventCtx(req), text: body.text, attachments, extraInput: extra, settings: ops.effective(session) });
+    return turns.startTurn({
+      session,
+      ctx: eventCtx(req),
+      text: body.text,
+      attachments,
+      extraInput: extra,
+      settings: ops.effective(session, scope.caps),
+      apiKey: scope.keyCtx(),
+    });
   });
 
   app.post('/api/sessions/:id/steer', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
+    scope.assertCanJoin(s.id);
     const { text } = z.object({ text: z.string().min(1).max(config.limits.maxPromptChars) }).strict().parse(req.body);
     return turns.steer(s.id, text, eventCtx(req));
   });
 
   app.post('/api/sessions/:id/interrupt', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const s = scopeOf(req).actSession(idParam.parse(req.params).id);
     await turns.interrupt(s.id);
     return { ok: true };
   });
 
   app.post('/api/sessions/:id/fork', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.session(idParam.parse(req.params).id);
     const { turnId } = z.object({ turnId: z.string().max(100).nullable().optional() }).strict().parse(req.body ?? {});
-    return { session: ops.info(await ops.fork(s, turnId ?? null, eventCtx(req))) };
+    return { session: scope.info(await ops.fork(s, turnId ?? null, eventCtx(req), scope.caps)) };
   });
 
   app.post('/api/sessions/:id/undo', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const { turnId } = z.object({ turnId: z.string().max(100).nullable().optional() }).strict().parse(req.body ?? {});
-    return ops.undo(s, turnId ?? null);
+    return ops.undo(s, turnId ?? null, scope.caps);
   });
 
-  app.post('/api/sessions/:id/compact', async (req) => ops.compact(getSession(idParam.parse(req.params).id), eventCtx(req)));
+  app.post('/api/sessions/:id/compact', async (req) => {
+    const scope = scopeOf(req);
+    return ops.compact(scope.actSession(idParam.parse(req.params).id), eventCtx(req), scope.caps, scope.keyCtx());
+  });
 
   app.post('/api/sessions/:id/review', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
-    return ops.review(s, reviewBody.parse(req.body).target, eventCtx(req));
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
+    return ops.review(s, reviewBody.parse(req.body).target, eventCtx(req), scope.caps, scope.keyCtx());
   });
 
   app.post('/api/sessions/:id/shell', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const { command } = z.object({ command: z.string().min(1).max(8000) }).strict().parse(req.body);
-    return ops.shell(s, command, eventCtx(req));
+    assertShellAllowed(scope);
+    return ops.shell(s, command, eventCtx(req), scope.caps, scope.keyCtx());
   });
 
   app.post('/api/sessions/:id/command', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const { command } = z.object({ command: z.string().min(1).max(config.limits.maxPromptChars) }).strict().parse(req.body);
-    return runCommand(
+    if (command.trim().startsWith('!')) assertShellAllowed(scope);
+    const result = await runCommand(
       {
         ops,
         turns,
         mcp,
         session: s,
         ctx: eventCtx(req),
-        key: null,
-        newSession: async (title) => ops.info(await newConsoleSession(title, req.auth.device!.id)),
-        folderRoot: workspace,
+        // `!command` runs outside Codex's sandbox: only for keys with nothing left to cap.
+        key: { caps: scope.caps, context: scope.keyCtx(), hasScope: (sc) => sc !== 'shell' || keyCanAllow(scope.key) },
+        newSession: async (title) => scope.info(await newConsoleSession(scope, title)),
+        folderRoot: await scope.workspace(),
         rename: (title) => ops.rename(s, title),
         archive: (archived) => ops.archive(s, archived),
       },
       command,
     );
+    return result.kind === 'settings' ? { ...result, session: scope.info(sessions.get(s.id)!) } : result;
   });
 
-  app.get('/api/sessions/:id/diff', async (req) => ops.diff(getSession(idParam.parse(req.params).id)));
-  app.get('/api/sessions/:id/status', async (req) => ops.status(getSession(idParam.parse(req.params).id)));
+  app.get('/api/sessions/:id/diff', async (req) => ops.diff(scopeOf(req).session(idParam.parse(req.params).id)));
+  app.get('/api/sessions/:id/status', async (req) => {
+    const scope = scopeOf(req);
+    const status = await ops.status(scope.session(idParam.parse(req.params).id), scope.caps);
+    return { ...status, session: scope.info(sessions.get(status.session.id)!) };
+  });
 
-  app.get('/api/sessions/:id/goal', async (req) => ({ goal: await ops.goal(getSession(idParam.parse(req.params).id)) }));
+  app.get('/api/sessions/:id/goal', async (req) => ({ goal: await ops.goal(scopeOf(req).session(idParam.parse(req.params).id)) }));
   app.post('/api/sessions/:id/goal', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.actSession(idParam.parse(req.params).id);
     const body = z.object({ objective: z.string().min(1).max(4000), tokenBudget: z.number().int().positive().nullable().optional() }).strict().parse(req.body);
-    return { goal: await ops.setGoal(s, body.objective, body.tokenBudget ?? null) };
+    return { goal: await ops.setGoal(s, body.objective, body.tokenBudget ?? null, scope.caps) };
   });
   app.delete('/api/sessions/:id/goal', async (req) => {
-    await ops.clearGoal(getSession(idParam.parse(req.params).id));
+    await ops.clearGoal(scopeOf(req).actSession(idParam.parse(req.params).id));
     return { goal: null };
   });
 
-  app.get('/api/sessions/:id/skills', async (req) => ({ skills: await ops.skills(getSession(idParam.parse(req.params).id).cwd) }));
+  app.get('/api/sessions/:id/skills', async (req) => ({ skills: await ops.skills(scopeOf(req).session(idParam.parse(req.params).id).cwd) }));
 
-  // Fuzzy search inside the session folder for @-mentions; paths come back workspace-relative.
+  // Fuzzy search inside the session folder for @-mentions; paths come back relative to the key's root.
   app.get('/api/sessions/:id/search', async (req) => {
-    const s = getSession(idParam.parse(req.params).id);
+    const scope = scopeOf(req);
+    const s = scope.session(idParam.parse(req.params).id);
     const { q } = z.object({ q: z.string().min(1).max(200) }).parse(req.query);
-    const base = sessions.workspacePath(s.cwd);
+    const base = scope.rel(sessions.workspacePath(s.cwd));
     if (base === null) throw new ApiError(400, 'workspace_unavailable');
     const files = await ops.searchFiles(s.cwd, q);
     return { files: files.map((f) => ({ name: f.name, path: base ? `${base}/${f.path}` : f.path })) };
   });
 
-  app.get('/api/approvals', async () => ({ approvals: turns.pendingApprovals(), questions: turns.pendingQuestions() }));
+  app.get('/api/approvals', async (req) => {
+    const scope = scopeOf(req);
+    const own = (sessionId: string) => {
+      const s = sessions.get(sessionId);
+      return Boolean(s && scope.canAct(s));
+    };
+    return { approvals: turns.pendingApprovals().filter((a) => own(a.sessionId)), questions: turns.pendingQuestions().filter((q) => own(q.sessionId)) };
+  });
 
   app.post('/api/approvals/:id', async (req) => {
     const { id } = idParam.parse(req.params);
+    const scope = scopeOf(req);
+    const sid = turns.approvalSession(id);
+    if (!sid) throw new ApiError(404, 'approval_not_found');
+    scope.actSession(sid);
     const { decision, ruleIndex } = decisionBody.parse(req.body);
+    // Allowing an approval can lift Codex past the sandbox (escalated commands, extra write roots,
+    // network or file permissions). A key may only do that if its own caps already allow everything.
+    if (!SAFE_APPROVAL_DECISIONS.includes(decision) && !keyCanAllow(scope.key)) {
+      throw new ApiError(403, 'setting_not_allowed', 'this key can only decline: give it full access and network to allow');
+    }
     turns.decide(id, decision, eventCtx(req), ruleIndex);
     return { ok: true };
   });
 
   app.post('/api/questions/:id', async (req) => {
     const { id } = idParam.parse(req.params);
+    const sid = turns.questionSession(id);
+    if (!sid) throw new ApiError(404, 'question_not_found');
+    const scope = scopeOf(req);
+    scope.actSession(sid);
+    scope.assertCanJoin(sid);
     turns.answer(id, answerBody.parse(req.body), eventCtx(req));
     return { ok: true };
   });
 
   // Server-sent events: a snapshot of the running turn, then live updates.
   app.get('/api/sessions/:id/events', async (req, reply) => {
-    const s = getSession(idParam.parse(req.params).id);
-    const deviceId = req.auth.device!.id;
+    const scope = scopeOf(req);
+    const s = scope.session(idParam.parse(req.params).id);
+    const keyId = scope.key.id;
     const loginId = req.auth.login!.id;
+    const ip = clientIp(req);
     const startedAt = Date.now();
     reply.hijack();
     const res = reply.raw;
@@ -516,7 +601,7 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
       'X-Content-Type-Options': 'nosniff',
     });
     const send = (ev: ServerEvent) => {
-      res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
+      res.write(`event: ${ev.type}\ndata: ${JSON.stringify(scope.paths(ev))}\n\n`);
     };
     res.write('retry: 3000\n\n');
     send({ type: 'snapshot', turn: turns.snapshot(s.id) });
@@ -527,24 +612,24 @@ export function registerSessionRoutes(app: FastifyInstance, deps: AppDeps): void
     };
     turns.on('event', listener);
     const ping = setInterval(() => res.write(': ping\n\n'), SSE_PING_MS);
-    // A revoked device or ended login must not keep receiving events.
-    const recheck = setInterval(() => {
-      const dev = devices.get(deviceId);
-      const login = db.get<LoginSessionRow>('SELECT * FROM login_sessions WHERE id = ?', loginId);
-      const now = Date.now();
-      const deviceOk = dev && dev.revoked_at === null && (dev.expires_at === null || dev.expires_at > now);
-      const loginOk = login && login.revoked_at === null && login.expires_at > now;
-      if (!deviceOk || !loginOk) close();
-    }, SSE_AUTH_RECHECK_MS);
+    // A sign-out, or a revoked, expired or narrowed key, must not keep receiving events.
+    const recheck = () => {
+      const login = logins.get(loginId);
+      const key = keys.get(keyId);
+      if (!login || !logins.isLive(login) || !key || keys.consoleProblem(key, ip) !== null) close();
+    };
+    const timer = setInterval(recheck, SSE_AUTH_RECHECK_MS);
+    logins.changes.on('changed', recheck);
     let closed = false;
     function close() {
       if (closed) return;
       closed = true;
       clearInterval(ping);
-      clearInterval(recheck);
+      clearInterval(timer);
+      logins.changes.off('changed', recheck);
       turns.off('event', listener);
       res.end();
-      audit.api({ deviceId, method: 'GET', route: '/api/sessions/:id/events', status: 200, durationMs: Date.now() - startedAt, bytesIn: null, bytesOut: null, ip: req.ip });
+      audit.api({ deviceId: null, apiKeyId: keyId, method: 'GET', route: '/api/sessions/:id/events', status: 200, durationMs: Date.now() - startedAt, bytesIn: null, bytesOut: null, ip });
     }
     req.raw.on('close', close);
   });

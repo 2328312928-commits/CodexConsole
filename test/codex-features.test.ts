@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ServerEvent } from '../shared/api.js';
 import { totpCode } from '../server/auth/totp.js';
-import { Client, createKey, makeHarness, pairAndLogin, waitForEvent, type Harness } from './helpers.js';
+import { Client, createKey, makeHarness, signIn, waitForEvent, type Harness } from './helpers.js';
 
 const endOf = (ev: ServerEvent) => (ev.type === 'turn_completed' ? ev.end : null);
 
@@ -24,7 +24,7 @@ describe('Codex features in the console', () => {
   let c: Client;
   beforeAll(async () => {
     h = await makeHarness();
-    c = await pairAndLogin(h);
+    c = await signIn(h);
   });
   afterAll(async () => {
     await h?.close();
@@ -273,7 +273,7 @@ describe('Codex administration', () => {
   let admin: Client;
   beforeAll(async () => {
     h = await makeHarness();
-    admin = await pairAndLogin(h);
+    admin = await signIn(h);
   });
   afterAll(async () => {
     await h?.close();
@@ -352,7 +352,7 @@ describe('Codex administration', () => {
       expect((await admin.get(url)).json().error.code).toBe('admin_required');
     }
     expect((await admin.post('/api/admin/codex/logout')).json().error.code).toBe('admin_required');
-    await admin.post('/api/auth/admin/verify', { code: totpCode(h.totpSecret, Date.now() + 60_000) });
+    await admin.post('/api/auth/admin', { password: h.password, code: totpCode(h.totpSecret, Date.now() + 60_000) });
   });
 });
 
@@ -361,7 +361,7 @@ describe('API keys and the new settings', () => {
   let admin: Client;
   beforeAll(async () => {
     h = await makeHarness();
-    admin = await pairAndLogin(h);
+    admin = await signIn(h);
   });
   afterAll(async () => {
     await h?.close();

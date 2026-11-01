@@ -1,6 +1,6 @@
 import type { QueuedPrompt } from '../../shared/api.js';
 import type { UserInput } from '../../shared/codex.js';
-import type { ApiKeyStore } from '../auth/apiKeys.js';
+import { keyCaps, type ApiKeyStore } from '../auth/apiKeys.js';
 import { randomId } from '../lib/crypto.js';
 import { ApiError } from '../lib/errors.js';
 import type { EventContext } from '../services/audit.js';
@@ -15,6 +15,8 @@ interface QueueItem extends QueuedPrompt {
   attachments: Attachment[];
   extraInput: UserInput[];
   keyId: string | null;
+  /** Where it was queued: the console lets a key with nothing capped work like the owner. */
+  channel: 'console' | 'api';
   ctx: EventContext;
 }
 
@@ -25,12 +27,17 @@ interface QueueItem extends QueuedPrompt {
 export class PromptQueue {
   private readonly items = new Map<string, QueueItem[]>();
   private readonly paused = new Set<string>();
+  /** Sessions whose next prompt waits until its key has fewer prompts running than its limit. */
+  private readonly waiting = new Set<string>();
 
   constructor(
     private readonly d: { turns: TurnManager; ops: SessionOps; sessions: SessionStore; keys: ApiKeyStore; logger: BridgeLogger },
   ) {
     d.turns.on('event', (sessionId, ev) => {
-      if (ev.type !== 'turn_completed' || !this.items.get(sessionId)?.length) return;
+      if (ev.type !== 'turn_completed') return;
+      // Any finished turn may free a slot for a key that is at its limit.
+      for (const waiting of this.waiting) if (waiting !== sessionId) setImmediate(() => void this.next(waiting));
+      if (!this.items.get(sessionId)?.length) return;
       if (ev.end.status !== 'completed') {
         this.paused.add(sessionId);
         this.publish(sessionId);
@@ -48,7 +55,7 @@ export class PromptQueue {
 
   add(
     sessionId: string,
-    item: { text: string; attachments: Attachment[]; extraInput: UserInput[]; keyId: string | null; ctx: EventContext },
+    item: { text: string; attachments: Attachment[]; extraInput: UserInput[]; keyId: string | null; channel: 'console' | 'api'; ctx: EventContext },
   ): QueuedPrompt {
     const list = this.items.get(sessionId) ?? [];
     if (list.length >= MAX_QUEUED) throw new ApiError(429, 'too_many_turns', `at most ${MAX_QUEUED} queued prompts`);
@@ -60,6 +67,7 @@ export class PromptQueue {
       attachments: item.attachments,
       extraInput: item.extraInput,
       keyId: item.keyId,
+      channel: item.channel,
       ctx: item.ctx,
     };
     list.push(queued);
@@ -88,6 +96,7 @@ export class PromptQueue {
   clear(sessionId: string): void {
     this.items.delete(sessionId);
     this.paused.delete(sessionId);
+    this.waiting.delete(sessionId);
     this.publish(sessionId);
   }
 
@@ -110,21 +119,30 @@ export class PromptQueue {
   private async next(sessionId: string): Promise<void> {
     if (this.d.turns.isRunning(sessionId) || this.paused.has(sessionId)) return;
     const list = this.items.get(sessionId);
-    const item = list?.shift();
-    if (!item) return;
-    if (list!.length === 0) this.items.delete(sessionId);
-    this.publish(sessionId);
+    const item = list?.[0];
+    if (!item) {
+      this.waiting.delete(sessionId);
+      return;
+    }
     const session = this.d.sessions.get(sessionId);
     if (!session) return this.clear(sessionId);
     let caps = null;
     let apiKey = null;
     if (item.keyId) {
-      // A key queues under its rights at the time the prompt actually runs.
+      // A key queues under its rights and limits at the time the prompt actually runs.
       const k = this.d.keys.get(item.keyId);
       if (!k || this.d.keys.status(k) !== 'active') return this.clearKey(item.keyId);
-      caps = { maxSandbox: k.maxSandbox, allowNetwork: k.allowNetwork, approvals: k.approvals };
+      if (this.d.turns.runningForKey(k.id) >= k.limits.concurrent) {
+        this.waiting.add(sessionId);
+        return;
+      }
+      caps = keyCaps(k, item.channel === 'console');
       apiKey = { id: k.id, approvals: k.approvals, quotaRemaining: this.d.keys.remaining(k) };
     }
+    this.waiting.delete(sessionId);
+    list!.shift();
+    if (list!.length === 0) this.items.delete(sessionId);
+    this.publish(sessionId);
     try {
       await this.d.ops.warm();
       await this.d.turns.startTurn({

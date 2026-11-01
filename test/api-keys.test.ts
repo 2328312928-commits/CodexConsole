@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ServerEvent } from '../shared/api.js';
-import { API_HOST, Client, createKey, KeyClient, makeHarness, pairAndLogin, waitForEvent, type Harness } from './helpers.js';
+import { API_HOST, Client, createKey, KeyClient, makeHarness, signIn, waitForEvent, type Harness } from './helpers.js';
 
 let h: Harness;
 let admin: Client;
 
 beforeAll(async () => {
   h = await makeHarness();
-  admin = await pairAndLogin(h);
+  admin = await signIn(h);
 });
 afterAll(async () => {
   await h?.close();
@@ -44,25 +44,25 @@ describe('API keys', () => {
     expect((await inject({ authorization: 'Bearer nonsense' })).json().error.code).toBe('invalid_api_key');
     const wrong = secret.slice(0, -4) + (secret.endsWith('AAAA') ? 'BBBB' : 'AAAA');
     expect((await inject({ authorization: `Bearer ${wrong}` })).json().error.code).toBe('invalid_api_key');
-    const { code } = h.runtime.devices.create('dev', null);
-    const dev = new Client(h.app);
-    await dev.post('/api/auth/pair', { code });
-    const cookie = [...dev.cookies].map(([k, v]) => `${k}=${v}`).join('; ');
+    // A console sign-in cookie means nothing to the public API.
+    const cookie = [...admin.cookies].map(([k, v]) => `${k}=${v}`).join('; ');
     expect((await inject({ cookie })).statusCode).toBe(401);
     expect((await inject({ authorization: `Bearer ${secret}` })).statusCode).toBe(200);
   });
 
   it('serves nothing but /v1 on the public listener, and keys open nothing on the console', async () => {
     const { client, secret } = await createKey(h, admin);
-    for (const url of ['/', '/admin', '/api/sessions', '/api/admin/overview', '/v2/me', '/v1x', '/pair']) {
+    for (const url of ['/', '/admin', '/api/sessions', '/api/admin/overview', '/v2/me', '/v1x']) {
       const r = await client.get(url);
       expect(r.statusCode, url).toBe(404);
     }
     expect((await client.get('/%76%31/me')).json().error.code).toBe('path_invalid');
     const bad = await h.publicApi.app.inject({ method: 'GET', url: '/v1/me', headers: { host: 'evil.example', authorization: `Bearer ${secret}` } });
     expect(bad.statusCode).toBe(421);
+    // The console takes no bearer tokens at all, and an API-only key cannot sign in to it.
     const consoleCall = await h.app.inject({ method: 'GET', url: '/api/sessions', headers: { host: '127.0.0.1:8787', authorization: `Bearer ${secret}` } });
-    expect(consoleCall.json().error.code).toBe('device_required');
+    expect(consoleCall.json().error.code).toBe('login_required');
+    expect((await new Client(h.app).post('/api/auth/key', { key: secret })).json().error.code).toBe('console_not_allowed');
   });
 
   it('runs a prompt, waits for the result and counts whole-turn tokens', async () => {
@@ -230,7 +230,7 @@ describe('API keys', () => {
   it('honours IP allowlists using the forwarded client address', async () => {
     const proxied = await makeHarness({ env: { CC_API_TRUST_PROXY: 'loopback' } });
     try {
-      const owner = await pairAndLogin(proxied);
+      const owner = await signIn(proxied);
       const { secret } = await createKey(proxied, owner, { ipAllowlist: ['10.0.0.0/8', '2001:db8::/32'] });
       const from = (ip: string) => new KeyClient(proxied, secret, { 'x-forwarded-for': ip });
       expect((await new KeyClient(proxied, secret).get('/v1/me')).json().error.code).toBe('ip_not_allowed');
@@ -245,7 +245,7 @@ describe('API keys', () => {
   it('throttles repeated bad keys without blocking valid ones', async () => {
     const t = await makeHarness({ env: { CC_API_BAD_KEY_LIMIT: '3' } });
     try {
-      const owner = await pairAndLogin(t);
+      const owner = await signIn(t);
       const { client } = await createKey(t, owner);
       const bad = new KeyClient(t, 'cck_0000000000000000.' + 'A'.repeat(43));
       const codes: number[] = [];

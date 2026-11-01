@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ServerEvent } from '../shared/api.js';
-import { Client, makeHarness, pairAndLogin, waitForEvent, type Harness } from './helpers.js';
+import { Client, makeHarness, signIn, waitForEvent, type Harness } from './helpers.js';
 
 let h: Harness;
 let c: Client;
 
 beforeAll(async () => {
   h = await makeHarness();
-  c = await pairAndLogin(h);
+  c = await signIn(h);
 });
 afterAll(async () => {
   await h?.close();

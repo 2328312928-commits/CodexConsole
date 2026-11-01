@@ -105,6 +105,19 @@ const SKIP_DIRS = new Set(['node_modules', '__pycache__', 'venv', 'target', 'bow
 const pathInvalid = () => new ApiError(400, 'path_invalid');
 const outside = () => new ApiError(403, 'path_outside_workspace');
 
+/** A readable, unique folder name for a new session. */
+export function defaultFolderName(title: string | undefined, now = new Date()): string {
+  const slug = (title ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  const date = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const suffix = crypto.randomBytes(3).toString('hex');
+  return `${slug || 'session'}-${date}-${suffix}`;
+}
+
 function errCode(err: unknown): string | undefined {
   return (err as NodeJS.ErrnoException)?.code;
 }

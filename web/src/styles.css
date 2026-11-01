@@ -2416,6 +2416,9 @@ details.advanced summary {
 }
 
 @media (max-width: 520px) {
+  .topbar {
+    gap: 4px;
+  }
   .topnav a {
     padding: 6px 7px;
   }

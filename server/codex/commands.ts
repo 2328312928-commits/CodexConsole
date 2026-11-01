@@ -58,8 +58,8 @@ export interface CommandContext {
   mcp: McpManager;
   session: SessionRow;
   ctx: EventContext;
-  /** Present when an API key runs the command. */
-  key: { caps: KeyCaps; context: KeyContext; hasScope: (s: ApiKeyScope) => boolean } | null;
+  /** Present when an API key runs the command (caps are null when the key has nothing left to cap). */
+  key: { caps: KeyCaps | null; context: KeyContext; hasScope: (s: ApiKeyScope) => boolean } | null;
   newSession: (title: string) => Promise<SessionInfo>;
   /** Where `/cd` may go (the key's folder for API keys). */
   folderRoot?: Workspace;

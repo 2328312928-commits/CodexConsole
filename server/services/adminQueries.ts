@@ -3,8 +3,6 @@ import type {
   ApiKeyInfo,
   ApiKeyUsage,
   AdminOverview,
-  DeviceInfo,
-  DeviceUsage,
   FileTransferRow,
   Page,
   RequestRow,
@@ -14,7 +12,6 @@ import type {
 } from '../../shared/api.js';
 import type { RateLimitSnapshot } from '../../shared/codex.js';
 import { ApiKeyStore, quotaWindow, type ApiKey } from '../auth/apiKeys.js';
-import type { DeviceRow } from '../auth/devices.js';
 import type { Db } from '../db/db.js';
 
 const DAY = 86_400_000;
@@ -103,67 +100,6 @@ export class AdminQueries {
         error: r.error,
         ip: r.ip,
       })),
-    };
-  }
-
-  usageByDevice(sinceMs: number): Map<string, DeviceUsage> {
-    const out = new Map<string, DeviceUsage>();
-    const get = (id: string) => {
-      let u = out.get(id);
-      if (!u) {
-        u = { requests: 0, inputTokens: 0, outputTokens: 0, uploads: 0, uploadBytes: 0, downloads: 0, downloadBytes: 0, apiCalls: 0 };
-        out.set(id, u);
-      }
-      return u;
-    };
-    for (const r of this.db.all<{ device_id: string; n: number; i: number; o: number }>(
-      `SELECT device_id, COUNT(*) AS n, COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o
-       FROM requests WHERE device_id IS NOT NULL AND started_at >= ? GROUP BY device_id`,
-      sinceMs,
-    )) {
-      const u = get(r.device_id);
-      u.requests = r.n;
-      u.inputTokens = r.i;
-      u.outputTokens = r.o;
-    }
-    for (const r of this.db.all<{ device_id: string; direction: string; n: number; b: number }>(
-      `SELECT device_id, direction, COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b
-       FROM file_transfers WHERE device_id IS NOT NULL AND ok = 1 AND at >= ? GROUP BY device_id, direction`,
-      sinceMs,
-    )) {
-      const u = get(r.device_id);
-      if (r.direction === 'upload') {
-        u.uploads += r.n;
-        u.uploadBytes += r.b;
-      } else {
-        u.downloads += r.n;
-        u.downloadBytes += r.b;
-      }
-    }
-    for (const r of this.db.all<{ device_id: string; n: number }>(
-      'SELECT device_id, COUNT(*) AS n FROM api_log WHERE device_id IS NOT NULL AND at >= ? GROUP BY device_id',
-      sinceMs,
-    )) {
-      get(r.device_id).apiCalls = r.n;
-    }
-    return out;
-  }
-
-  deviceInfo(d: DeviceRow, usage: DeviceUsage | undefined, now = Date.now()): DeviceInfo {
-    const status = d.revoked_at !== null ? 'revoked' : d.expires_at !== null && d.expires_at <= now ? 'expired' : d.paired_at === null ? 'pending' : 'active';
-    return {
-      id: d.id,
-      name: d.name,
-      status,
-      tokenHint: d.token_hint,
-      createdAt: d.created_at,
-      pairedAt: d.paired_at,
-      expiresAt: d.expires_at,
-      revokedAt: d.revoked_at,
-      lastUsedAt: d.last_used_at,
-      lastIp: d.last_ip,
-      lastUserAgent: d.last_user_agent,
-      usage: usage ?? { requests: 0, inputTokens: 0, outputTokens: 0, uploads: 0, uploadBytes: 0, downloads: 0, downloadBytes: 0, apiCalls: 0 },
     };
   }
 
@@ -263,7 +199,8 @@ export class AdminQueries {
     return { total, rows };
   }
 
-  keyInfo(key: ApiKey, store: ApiKeyStore, now = Date.now()): ApiKeyInfo {
+  /** `signIns`: how many browsers are signed in to the console with this key right now. */
+  keyInfo(key: ApiKey, store: ApiKeyStore, signIns = 0, now = Date.now()): ApiKeyInfo {
     const since = now - 30 * DAY;
     const r = this.db.get<{ n: number; i: number; o: number; f: number }>(
       `SELECT COUNT(*) AS n, COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o,
@@ -287,6 +224,8 @@ export class AdminQueries {
       display: ApiKeyStore.display(key),
       status: store.status(key, now),
       scopes: [...key.scopes],
+      consoleAccess: key.consoleAccess,
+      signIns,
       folder: key.folder,
       quota: { tokens: key.quotaTokens, period: key.quotaPeriod, used: store.usedTokens(key.id, key.quotaPeriod, now), resetsAt: window.resetsAt },
       maxSandbox: key.maxSandbox,
@@ -306,7 +245,7 @@ export class AdminQueries {
     };
   }
 
-  keyUsage(key: ApiKey, store: ApiKeyStore, tzOffsetMin: number, now = Date.now()): ApiKeyUsage {
+  keyUsage(key: ApiKey, store: ApiKeyStore, tzOffsetMin: number, signIns = 0, now = Date.now()): ApiKeyUsage {
     const shiftSec = -tzOffsetMin * 60;
     const rows = this.db.all<{ day: string; n: number; t: number; f: number }>(
       `SELECT date(started_at / 1000 + ?, 'unixepoch') AS day, COUNT(*) AS n,
@@ -324,7 +263,7 @@ export class AdminQueries {
       const r = byDay.get(day);
       daily.push({ day, requests: r?.n ?? 0, tokens: r?.t ?? 0, failed: r?.f ?? 0 });
     }
-    return { key: this.keyInfo(key, store, now), daily, recent: this.requests({ apiKeyId: key.id }, 20, 0).rows };
+    return { key: this.keyInfo(key, store, signIns, now), daily, recent: this.requests({ apiKeyId: key.id }, 20, 0).rows };
   }
 
   recordRateLimits(snapshot: RateLimitSnapshot, now = Date.now()): void {
@@ -335,7 +274,7 @@ export class AdminQueries {
     this.db.run('INSERT INTO rate_limit_snapshots (at, data) VALUES (?, ?)', now, data);
   }
 
-  overview(tzOffsetMin: number, now = Date.now()): Omit<AdminOverview, 'codex' | 'publicApi'> {
+  overview(tzOffsetMin: number, signInIdleMs: number, now = Date.now()): Omit<AdminOverview, 'codex' | 'publicApi'> {
     const sum = (since: number) =>
       this.db.get<{ n: number; i: number; o: number; f: number }>(
         `SELECT COUNT(*) AS n, COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o,
@@ -351,9 +290,10 @@ export class AdminQueries {
         now - 7 * DAY,
         ...dirs,
       )!.b;
-    const activeDevices = this.db.get<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM devices WHERE revoked_at IS NULL AND paired_at IS NOT NULL AND (expires_at IS NULL OR expires_at > ?)',
+    const activeSignIns = this.db.get<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM login_sessions WHERE revoked_at IS NULL AND expires_at > ? AND last_seen_at >= ?',
       now,
+      now - signInIdleMs,
     )!.n;
     const securityEvents24h = this.db.get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM security_events WHERE at >= ? AND kind IN (${SECURITY_ALERT_KINDS.map(() => '?').join(',')})`,
@@ -395,7 +335,7 @@ export class AdminQueries {
         failed7d: d7.f,
         uploadBytes7d: bytes(['upload']),
         downloadBytes7d: bytes(['download', 'view']),
-        activeDevices,
+        activeSignIns,
         securityEvents24h,
       },
       daily,

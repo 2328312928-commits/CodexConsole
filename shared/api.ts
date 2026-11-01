@@ -90,9 +90,23 @@ export type ApprovalKind = 'command' | 'fileChange' | 'permissions';
 
 export interface AuthState {
   setupComplete: boolean;
-  device: { id: string; name: string } | null;
   loggedIn: boolean;
+  /** Admin area unlocked with the owner password and an authenticator code. */
   admin: boolean;
+  /** The API key this browser signed in with. */
+  key: SignedInKey | null;
+}
+
+/** What the signed-in key may do in the console (the UI greys out the rest). */
+export interface SignedInKey {
+  id: string;
+  label: string;
+  access: Exclude<ConsoleAccess, 'none'>;
+  maxSandbox: SandboxMode;
+  allowNetwork: boolean;
+  approvals: KeyApprovals;
+  /** Approvals that widen access (allow, always allow, network rules) are open to this key. */
+  canAllow: boolean;
 }
 
 export interface CodexStatusInfo {
@@ -380,42 +394,6 @@ export interface CodexThreadSummary {
 
 // ---- admin ----
 
-export type DeviceStatus = 'pending' | 'active' | 'expired' | 'revoked';
-
-export interface DeviceInfo {
-  id: string;
-  name: string;
-  status: DeviceStatus;
-  tokenHint: string | null;
-  createdAt: number;
-  pairedAt: number | null;
-  expiresAt: number | null;
-  revokedAt: number | null;
-  lastUsedAt: number | null;
-  lastIp: string | null;
-  lastUserAgent: string | null;
-  usage: DeviceUsage;
-}
-
-export interface DeviceUsage {
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
-  uploads: number;
-  uploadBytes: number;
-  downloads: number;
-  downloadBytes: number;
-  apiCalls: number;
-}
-
-export interface PairingInfo {
-  device: DeviceInfo;
-  code: string;
-  expiresAt: number;
-  pairUrl: string;
-  qrSvg: string;
-}
-
 export interface RequestRow {
   id: string;
   kind: string;
@@ -472,8 +450,8 @@ export interface SecurityEventRow {
 
 export interface LoginSessionInfo {
   id: string;
-  deviceId: string;
-  deviceName: string | null;
+  apiKeyId: string;
+  apiKeyLabel: string | null;
   createdAt: number;
   lastSeenAt: number;
   expiresAt: number;
@@ -499,7 +477,7 @@ export interface AdminOverview {
     failed7d: number;
     uploadBytes7d: number;
     downloadBytes7d: number;
-    activeDevices: number;
+    activeSignIns: number;
     securityEvents24h: number;
   };
   daily: Array<{ day: string; requests: number; inputTokens: number; outputTokens: number; failed: number }>;
@@ -566,6 +544,9 @@ export const DANGEROUS_SCOPES: readonly ApiKeyScope[] = ['mcp:manage', 'shell'];
 export const QUOTA_PERIODS = ['day', 'month', 'total'] as const;
 export type QuotaPeriod = (typeof QUOTA_PERIODS)[number];
 export type KeyApprovals = 'deny' | 'ask';
+/** Signing in to the console with the key: not at all, only its own folder, or everything but admin. */
+export const CONSOLE_ACCESS = ['none', 'folder', 'full'] as const;
+export type ConsoleAccess = (typeof CONSOLE_ACCESS)[number];
 export type ApiKeyStatus = 'active' | 'expired' | 'revoked';
 
 export interface ApiKeyLimits {
@@ -582,6 +563,9 @@ export interface ApiKeyInfo {
   display: string;
   status: ApiKeyStatus;
   scopes: ApiKeyScope[];
+  consoleAccess: ConsoleAccess;
+  /** Browsers currently signed in to the console with this key. */
+  signIns: number;
   folder: string;
   quota: { tokens: number | null; period: QuotaPeriod; used: number; resetsAt: number | null };
   maxSandbox: SandboxMode;
@@ -604,7 +588,10 @@ export interface ApiKeySecret {
   key: ApiKeyInfo;
   /** Shown exactly once. */
   secret: string;
+  /** Where the public API lives (`<baseUrl>/v1`). */
   baseUrl: string;
+  /** Where to sign in to the console with the key. */
+  consoleUrl: string;
 }
 
 export interface ApiKeyUsage {
