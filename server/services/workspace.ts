@@ -126,10 +126,17 @@ function errCode(err: unknown): string | undefined {
 export class Workspace {
   realRoot = '';
 
-  constructor(readonly root: string) {}
+  /**
+   * `shared`: Codex runs as its own user in the same group (servers set up by deploy/install.sh),
+   * so folders and files the console makes must be usable by the group. Otherwise they stay private.
+   */
+  constructor(
+    readonly root: string,
+    readonly opts: { shared?: boolean } = {},
+  ) {}
 
   async init(): Promise<void> {
-    await fsp.mkdir(this.root, { recursive: true, mode: 0o700 });
+    await fsp.mkdir(this.root, { recursive: true, mode: this.opts.shared ? 0o770 : 0o700 });
     this.realRoot = await fsp.realpath(this.root);
   }
 
@@ -281,7 +288,7 @@ export class Workspace {
         else cb(null, chunk);
       },
     });
-    const handle = await fsp.open(tmp, 'wx', 0o644);
+    const handle = await fsp.open(tmp, 'wx', this.opts.shared ? 0o660 : 0o644);
     try {
       await pipeline(stream, counter, handle.createWriteStream());
       const target = await this.placeFile(tmp, dir.abs, name, overwrite);

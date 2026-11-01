@@ -37,6 +37,13 @@ if (process.argv.includes('doctor')) {
   process.exit(0);
 }
 
+// `codex mcp logout <name>`
+const mcpAt = process.argv.indexOf('mcp');
+if (mcpAt !== -1 && process.argv[mcpAt + 1] === 'logout') {
+  process.stdout.write(`Removed OAuth credentials for '${process.argv[mcpAt + 2]}'.\n`);
+  process.exit(0);
+}
+
 let account = signedIn ? { type: 'chatgpt', email: 'owner@example.com', planType: 'plus' } : null;
 const terminals = new Map();
 const features = [

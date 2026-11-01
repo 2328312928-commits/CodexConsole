@@ -10,6 +10,7 @@ import { generateTotpSecret, totpCode } from '../server/auth/totp.js';
 import { loadConfig } from '../server/config.js';
 import { buildApp } from '../server/http/app.js';
 import { buildPublicApi } from '../server/http/publicApi.js';
+import { startRelay } from '../server/codex/relay.js';
 import { createRuntime } from '../server/runtime.js';
 
 export const FAKE_CODEX = fileURLToPath(new URL('./fake-codex/app-server.mjs', import.meta.url));
@@ -23,6 +24,8 @@ export const API_HOST = '127.0.0.1:8788';
 export interface Harness {
   root: string;
   workspace: string;
+  /** Set when Codex runs behind the relay, as on a server set up by deploy/install.sh. */
+  relay: { socketPath: string; stop: () => Promise<void>; start: () => Promise<void> } | null;
   app: FastifyInstance;
   publicApi: Awaited<ReturnType<typeof buildPublicApi>>;
   runtime: Awaited<ReturnType<typeof createRuntime>>;
@@ -31,9 +34,37 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function makeHarness(opts: { signedIn?: boolean; env?: Record<string, string>; fakeEnv?: Record<string, string> } = {}): Promise<Harness> {
+export async function makeHarness(
+  opts: { signedIn?: boolean; env?: Record<string, string>; fakeEnv?: Record<string, string>; relay?: { maxAppServers?: number } } = {},
+): Promise<Harness> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-'));
   const workspace = path.join(root, 'workspace');
+  const codexEnv = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    CODEX_HOME: path.join(root, 'codex-home'),
+    FAKE_CODEX_SIGNED_IN: opts.signedIn === false ? '0' : '1',
+    FAKE_CODEX_DELAY_MS: '1',
+    ...opts.fakeEnv,
+  };
+  // Codex behind the relay: the console connects to a socket instead of starting Codex.
+  let relay: Harness['relay'] = null;
+  if (opts.relay) {
+    const socketPath = path.join(root, 'agent.sock');
+    let running: Awaited<ReturnType<typeof startRelay>> | null = null;
+    const start = async () => {
+      running = await startRelay({ socketPath, bin: process.execPath, binArgs: [FAKE_CODEX], env: codexEnv, logger: silent, maxAppServers: opts.relay?.maxAppServers });
+    };
+    await start();
+    relay = {
+      socketPath,
+      start,
+      async stop() {
+        await running?.close();
+        running = null;
+      },
+    };
+  }
   const config = loadConfig({
     CC_DATA_DIR: path.join(root, 'data'),
     CC_WORKSPACE_ROOT: workspace,
@@ -41,18 +72,12 @@ export async function makeHarness(opts: { signedIn?: boolean; env?: Record<strin
     CODEX_BIN: process.execPath,
     CC_RATE_API_PER_MIN: '100000',
     CC_RATE_PROMPTS_PER_MIN: '1000',
+    ...(relay ? { CC_CODEX_AGENT_SOCKET: relay.socketPath } : {}),
     ...opts.env,
   });
   const runtime = await createRuntime(config, {
     codexArgs: [FAKE_CODEX, 'app-server'],
-    codexEnv: {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      CODEX_HOME: path.join(root, 'codex-home'),
-      FAKE_CODEX_SIGNED_IN: opts.signedIn === false ? '0' : '1',
-      FAKE_CODEX_DELAY_MS: '1',
-      ...opts.fakeEnv,
-    },
+    codexEnv,
     logger: silent,
     minBackoffMs: 50,
   });
@@ -68,6 +93,7 @@ export async function makeHarness(opts: { signedIn?: boolean; env?: Record<strin
   return {
     root,
     workspace: runtime.workspace.realRoot,
+    relay,
     app,
     publicApi,
     runtime,
@@ -77,6 +103,7 @@ export async function makeHarness(opts: { signedIn?: boolean; env?: Record<strin
       await publicApi.close();
       await app.close();
       await runtime.stop();
+      await relay?.stop();
       fs.rmSync(root, { recursive: true, force: true });
     },
   };

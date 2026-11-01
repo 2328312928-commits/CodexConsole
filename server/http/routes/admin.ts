@@ -181,7 +181,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   app.get('/api/admin/codex', ADMIN, async () => ({
     status: codexStatus(deps, true),
-    bin: config.codex.bin,
+    bin: config.codex.agentSocket ? `relay: ${config.codex.agentSocket}` : config.codex.bin,
     stderr: bridge.stderr().slice(-200),
     runningTurns: turns.runningCount(),
   }));

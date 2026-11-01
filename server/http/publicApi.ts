@@ -170,7 +170,7 @@ export async function buildPublicApi(deps: AppDeps, opts: { logger?: FastifyServ
 
   /** The key's folder as its own workspace; refuses if it was swapped for a link elsewhere. */
   async function keyWorkspace(k: ApiKey): Promise<Workspace> {
-    const ws = new Workspace(path.join(workspace.realRoot, k.folder));
+    const ws = new Workspace(path.join(workspace.realRoot, k.folder), workspace.opts);
     await ws.init();
     if (!workspace.contains(ws.realRoot) || ws.realRoot === workspace.realRoot) throw new ApiError(403, 'path_outside_workspace');
     return ws;

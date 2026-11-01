@@ -49,7 +49,7 @@ async function main(): Promise<void> {
       url: config.publicOrigin,
       dataDir: config.dataDir,
       workspaceRoot: config.workspaceRoot,
-      codexBin: config.codex.bin,
+      codexBin: config.codex.agentSocket ? `relay ${config.codex.agentSocket}` : config.codex.bin,
       sandbox: config.codex.sandbox,
       approvalPolicy: config.codex.approvalPolicy,
     },

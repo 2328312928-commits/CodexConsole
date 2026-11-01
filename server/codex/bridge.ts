@@ -1,10 +1,12 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import type { Readable, Writable } from 'node:stream';
 import { promisify } from 'node:util';
 import type { CodexAccount, RateLimitSnapshot } from '../../shared/codex.js';
+import { connectRelay, runViaRelay } from './relay.js';
 import { RpcError, RpcPeer, type RpcId } from './rpc.js';
 
 const runFile = promisify(execFile);
@@ -34,10 +36,24 @@ export interface BridgeLogger {
   error(obj: object | string, msg?: string): void;
 }
 
+/** What the bridge needs from Codex: the app-server child process, or a connection to it through the relay. */
+export interface CodexProcess {
+  stdin: Writable | null;
+  stdout: Readable | null;
+  stderr: Readable | null;
+  pid?: number;
+  exitCode: number | null;
+  kill(signal?: NodeJS.Signals): boolean;
+  once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  once(event: 'error', listener: (err: Error) => void): this;
+}
+
 export interface BridgeOptions {
   bin: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  /** Reach Codex through the relay on this socket (Codex runs as its own user) instead of starting it. */
+  agentSocket?: string | null;
   clientVersion: string;
   logger: BridgeLogger;
   /** Override restart backoff (tests). */
@@ -64,7 +80,7 @@ export function codexChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 
 /** Owns the `codex app-server` child process: spawn, handshake, restart with backoff. */
 export class CodexBridge extends EventEmitter<BridgeEvents> {
-  private child: ChildProcess | null = null;
+  private child: CodexProcess | null = null;
   private peer: RpcPeer | null = null;
   private readonly loadedThreads = new Set<string>();
   private readonly stderrTail: string[] = [];
@@ -137,6 +153,7 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
 
   /** Run a Codex CLI subcommand (e.g. `doctor`) the same way the app-server is started. */
   async runCli(args: string[], timeoutMs = 60_000): Promise<{ ok: boolean; output: string }> {
+    if (this.opts.agentSocket) return runViaRelay(this.opts.agentSocket, args, timeoutMs);
     const prefix = (this.opts.args ?? ['app-server']).filter((a) => a !== 'app-server');
     try {
       const { stdout, stderr } = await runFile(this.opts.bin, [...prefix, ...args], { env: this.opts.env ?? codexChildEnv(), timeout: timeoutMs, maxBuffer: 1024 * 1024 });
@@ -242,13 +259,15 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
     const gen = ++this.generation;
     this.setState(this.status.restarts > 0 ? 'restarting' : 'starting');
     this.loadedThreads.clear();
-    let child: ChildProcess;
+    let child: CodexProcess;
     try {
-      child = spawn(this.opts.bin, this.opts.args ?? ['app-server'], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: this.opts.env ?? codexChildEnv(),
-        windowsHide: true,
-      });
+      child = this.opts.agentSocket
+        ? connectRelay(this.opts.agentSocket)
+        : spawn(this.opts.bin, this.opts.args ?? ['app-server'], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: this.opts.env ?? codexChildEnv(),
+            windowsHide: true,
+          });
     } catch (err) {
       this.onSpawnFailure(gen, (err as Error).message);
       return;
@@ -275,7 +294,7 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
     void this.handshake(gen, peer, child);
   }
 
-  private async handshake(gen: number, peer: RpcPeer, child: ChildProcess): Promise<void> {
+  private async handshake(gen: number, peer: RpcPeer, child: CodexProcess): Promise<void> {
     try {
       const init = await peer.request<{ userAgent: string }>(
         'initialize',
@@ -339,7 +358,7 @@ export class CodexBridge extends EventEmitter<BridgeEvents> {
 
   private onSpawnFailure(gen: number, message: string): void {
     if (gen !== this.generation) return;
-    this.opts.logger.error({ bin: this.opts.bin, err: message }, 'Could not start codex app-server');
+    this.opts.logger.error({ bin: this.opts.agentSocket ? `relay ${this.opts.agentSocket}` : this.opts.bin, err: message }, 'Could not start codex app-server');
     this.status.lastError = message;
     this.onExit(gen, null, null);
   }

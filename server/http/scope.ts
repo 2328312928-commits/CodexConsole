@@ -43,7 +43,7 @@ export class ConsoleScope {
   async workspace(): Promise<Workspace> {
     if (this.full) return this.deps.workspace;
     if (!this.folderWs) {
-      const ws = new Workspace(path.join(this.deps.workspace.realRoot, this.key.folder));
+      const ws = new Workspace(path.join(this.deps.workspace.realRoot, this.key.folder), this.deps.workspace.opts);
       await ws.init();
       if (!this.deps.workspace.contains(ws.realRoot) || ws.realRoot === this.deps.workspace.realRoot) throw new ApiError(403, 'path_outside_workspace');
       this.folderWs = ws;

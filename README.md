@@ -124,14 +124,14 @@ Keys with API scopes can call `/v1` for your own scripts: on a deployed server a
 ## Security summary
 
 - **Signing in:** an API key (`cck_…`, 256 random bits, stored only as an HMAC) creates a session in an HttpOnly, Secure, SameSite=Strict cookie. The key is checked again on every request, so revoking it, letting it expire, taking away its console access or a non-matching IP allowlist ends the session at once.
-- **Admin area:** separately protected. It needs the owner password (Argon2id) and a single-use TOTP code on top of a key sign-in, and locks again after 15 minutes without use. No key alone opens it in the browser. Codex runs as the console's own user, though, so a key with full access is equivalent to the owner: see [SECURITY.md](SECURITY.md#limits-of-the-admin-separation).
+- **Admin area:** separately protected. It needs the owner password (Argon2id) and a single-use TOTP code on top of a key sign-in, and locks again after 15 minutes without use. No key alone opens it. On a deployed server Codex runs as its own user and cannot reach the console's data; on your own machine a key with full access is equivalent to the owner: see [SECURITY.md](SECURITY.md#limits-of-the-admin-separation).
 - **Rate limits:**
   - key sign-in: 10 failures per IP / 15 min, then that address is locked (per address only, so nobody can lock you out from elsewhere); during a flood, one failure locks an address
   - admin unlock: 5 failures per IP / 15 min, 20 overall
   - requests per key, prompts per key, upload bytes per key per hour
 - **Request checks:** a Host allowlist (blocks DNS rebinding), Origin checks plus a custom header on every state-changing request (CSRF), a strict Content-Security-Policy and other security headers.
 - **Files:** everything stays inside the workspace (or the key's folder). Path traversal and symlinks pointing outside are refused. HTML is shown as text, and files are served with a sandbox CSP.
-- **Server:** behind Caddy on loopback only, under its own system user, read-only outside its data folder; firewall allows only SSH, 80 and 443; fail2ban; automatic security updates.
+- **Server:** behind Caddy on loopback only, under its own system user, read-only outside its data folder; Codex in a separate service as another user that cannot see the console's data; firewall allows only SSH, 80 and 443; fail2ban; automatic security updates.
 - **Audit:** every API call, prompt, file transfer, sign-in and security event is logged with the key that made it. Retention is configurable.
 
 Full details, and what to do if a device or key is lost: [SECURITY.md](SECURITY.md).

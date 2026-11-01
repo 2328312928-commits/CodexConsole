@@ -1,10 +1,7 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { McpServerInput, McpServerView } from '../../shared/api.js';
 import { ApiError } from '../lib/errors.js';
-import { codexChildEnv, type CodexBridge } from './bridge.js';
+import type { CodexBridge } from './bridge.js';
 
-const run = promisify(execFile);
 export const MCP_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 interface McpConfigEntry {
@@ -72,10 +69,7 @@ function toEntry(input: McpServerInput, previousEnv: Record<string, string> = {}
  * `codex mcp add/remove` edits), its live status list and its OAuth sign-in.
  */
 export class McpManager {
-  constructor(
-    private readonly bridge: CodexBridge,
-    private readonly codexBin: string,
-  ) {}
+  constructor(private readonly bridge: CodexBridge) {}
 
   private async config(): Promise<Record<string, McpConfigEntry>> {
     const res = await this.bridge.request<{ config: { mcp_servers?: Record<string, McpConfigEntry> } }>('config/read', {}).catch((err) => {
@@ -174,10 +168,8 @@ export class McpManager {
 
   async logout(name: string): Promise<void> {
     if (!MCP_NAME_RE.test(name)) throw new ApiError(400, 'invalid_name');
-    try {
-      await run(this.codexBin, ['mcp', 'logout', name], { env: codexChildEnv(), timeout: 30_000 });
-    } catch (err) {
-      throw new ApiError(502, 'mcp_error', ((err as { stderr?: string }).stderr || (err as Error).message).slice(0, 500));
-    }
+    // Through the bridge, so it also works when Codex runs as its own user behind the relay.
+    const r = await this.bridge.runCli(['mcp', 'logout', name], 30_000);
+    if (!r.ok) throw new ApiError(502, 'mcp_error', r.output.slice(0, 500));
   }
 }

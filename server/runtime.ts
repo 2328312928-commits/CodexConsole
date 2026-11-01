@@ -54,7 +54,7 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
     defaultApprovalPolicy: config.codex.approvalPolicy,
     defaultNetworkAccess: config.codex.networkAccess,
   });
-  const workspace = new Workspace(config.workspaceRoot);
+  const workspace = new Workspace(config.workspaceRoot, { shared: Boolean(config.codex.agentSocket) });
   await workspace.init();
   const media = new MediaStore(path.join(config.dataDir, 'media'), workspace);
   const sessions = new SessionStore(db, workspace.realRoot);
@@ -63,6 +63,7 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
   const version = appVersion();
   const bridge = new CodexBridge({
     bin: config.codex.bin,
+    agentSocket: config.codex.agentSocket,
     args: opts.codexArgs,
     env: opts.codexEnv,
     clientVersion: version,
@@ -93,7 +94,7 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
       apiKey: { id: key.id, approvals: key.approvals, quotaRemaining: stores.keys.remaining(key) },
     };
   });
-  const mcp = new McpManager(bridge, config.codex.bin);
+  const mcp = new McpManager(bridge);
   const queue = new PromptQueue({ turns, ops, sessions, keys: stores.keys, logger: opts.logger });
   const queries = new AdminQueries(db);
   bridge.on('rateLimits', (snap) => queries.recordRateLimits(snap));

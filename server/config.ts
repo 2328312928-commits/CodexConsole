@@ -21,6 +21,8 @@ export interface AppConfig {
   webDir: string;
   codex: {
     bin: string;
+    /** Set when Codex runs as its own user behind the relay (codex-console-codex.service). */
+    agentSocket: string | null;
     sandbox: SandboxMode;
     approvalPolicy: ApprovalPolicy;
     networkAccess: boolean;
@@ -237,6 +239,8 @@ export function loadConfig(env: Env = process.env): AppConfig {
   }
 
   const codexBin = str(env, 'CODEX_BIN') ?? resolvePinnedCodexBin() ?? 'codex';
+  const agentSocket = str(env, 'CC_CODEX_AGENT_SOCKET') ?? null;
+  if (agentSocket !== null && !path.isAbsolute(agentSocket)) throw new ConfigError('CC_CODEX_AGENT_SOCKET must be an absolute path');
   // Built UI lives in dist/web: next to dist/server when compiled, under dist/ when run from source.
   const here = path.dirname(fileURLToPath(import.meta.url));
   const compiled = path.basename(path.dirname(here)) === 'dist';
@@ -256,6 +260,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     webDir,
     codex: {
       bin: expandHome(codexBin),
+      agentSocket,
       sandbox: oneOf(env, 'CC_CODEX_SANDBOX', SANDBOX_MODES, 'workspace-write'),
       approvalPolicy: oneOf(env, 'CC_CODEX_APPROVAL', APPROVAL_POLICIES, 'on-request'),
       networkAccess: bool(env, 'CC_CODEX_NETWORK', false),

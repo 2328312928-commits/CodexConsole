@@ -14,7 +14,7 @@ Codex Console is a remote control for a coding agent that runs commands on the s
    - After a rotation the old secret never signs in to the console again; an optional grace period keeps it working for API scripts only.
 2. **For the admin area, the owner password and an authenticator code**, on top of a key sign-in.
    - Passwords are hashed with Argon2id (64 MiB, 3 passes). Each TOTP time step is accepted only once.
-   - The unlock lapses after 15 minutes without admin use and after 12 hours at most. In the browser, no key, whatever its settings, opens the admin area on its own. Codex itself is a different matter: see [Limits of the admin separation](#limits-of-the-admin-separation).
+   - The unlock lapses after 15 minutes without admin use and after 12 hours at most. No key, whatever its settings, opens the admin area on its own. On a deployed server that also holds against Codex, which runs as its own user; on your own machine it does not: see [Limits of the admin separation](#limits-of-the-admin-separation).
 
 Failed attempts never say which factor was wrong. The security log records the reason, for the owner's eyes.
 
@@ -75,7 +75,8 @@ Hitting a limit is recorded in the security log; repeated identical events are c
 
 - **Nothing secret is uploaded.** Only files git tracks are copied; `.env`, data folders, databases and key files are excluded by `.gitignore`. Secrets (the pepper, password hash, TOTP secret, first key) are created on the server; the first key is printed once in your terminal.
 - **Network.** The console (`127.0.0.1:8787`) and the API (`127.0.0.1:8788`) listen on loopback only, behind Caddy with automatic HTTPS. The firewall allows only SSH, 80 and 443.
-- **Service.** A dedicated system user runs it. The code is owned by root, so the service cannot change it. systemd makes everything outside `/var/lib/codex-console` read-only, even in Codex's full-access mode, and blocks privilege escalation. Options that cover `/proc` or `/sys` are left out because Codex mounts its own `/proc` for its sandbox.
+- **Service.** A dedicated system user (`codexconsole`) runs the console. The code is owned by root, so the service cannot change it. systemd makes everything outside `/var/lib/codex-console` read-only and blocks privilege escalation.
+- **Codex as its own user.** Codex runs in a second service (`codex-console-codex`) as its own user (`codexagent`). It may write only to the workspace and its own folders; the console's data folder is private to the console's user, and Codex's service cannot even see it. The console reaches Codex through a small relay on a socket only their shared group may use (`/run/codex-console/codex.sock`); the relay runs nothing but the app-server, `codex doctor` and MCP sign-out. Options that cover `/proc` or `/sys` are left out because Codex mounts its own `/proc` for its sandbox.
 - **Codex's sandbox.** On Ubuntu 23.10+ the installer adds an AppArmor profile that lets only the Codex binary create the user namespaces its sandbox needs.
 - **Maintenance.** fail2ban watches SSH; security updates install automatically. `--harden-ssh` turns off SSH passwords, but only after `deploy.sh` has logged in with a key.
 - **No lockout.** Turning the firewall on or changing SSH arms a 10-minute timer that undoes the change unless a new SSH login confirms it.
@@ -127,11 +128,14 @@ On a deployed server use `sudo codex-console setup …`; on your own machine `np
 
 ## Limits of the admin separation
 
-Codex runs as the same system user as the console, and its sandbox limits writes and network access, not reads. So any key that can send prompts can have Codex **read** the console's data folder (the database, the pepper, the encrypted authenticator secret) and Codex's own sign-in. For someone holding a key, the admin area is therefore protected by your **password alone**: use a long one. A key with **full access** can also **change** those files, so it is equivalent to the owner. The admin password and code stop a key holder in the browser, not one who turns Codex against the console itself. Give full access only to keys on devices you control, and keep the others capped.
+Codex's sandbox limits writes and network access, not reads, so what Codex can reach depends on the system user it runs as.
+
+- **On a server set up with `deploy/deploy.sh`** Codex runs as its own user and cannot read or change the console's data folder (the database, the pepper, keys, the encrypted authenticator secret). A key holder cannot turn Codex against the console: the admin area still needs your password and an authenticator code. A key with full access still has Codex's own reach: the workspace, Codex's ChatGPT sign-in and the network.
+- **On your own machine** (`npm start`) Codex runs as your user, next to the console's data. Any key that can send prompts can have Codex read that data, so the admin area is protected by your password alone; a key with full access can also change it, which makes it equivalent to the owner. Give full access only to keys on devices you control.
 
 ## Things this does not protect against
 
-- Someone with a shell on the server as root or as the console's user. They can read the database and secrets file, and use Codex directly.
+- Someone with a shell on the server as root or as the console's user. They can read the database and secrets file, and use Codex directly. (A shell as Codex's user reaches the workspace and Codex's sign-in, not the console's data.)
 - A full-console key in the wrong hands: it can do whatever Codex can do. Keep keys like passwords, give each device its own, use expiry, caps or an IP allowlist where they fit, and revoke a key as soon as a device is gone.
 - Malicious content that Codex reads and acts on (prompt injection from files or web pages). Review approval requests before allowing them.
 - Exposure without HTTPS. The server refuses plain HTTP on non-loopback addresses, but a misconfigured proxy in front can still leak traffic. The deploy script sets up Caddy for you.

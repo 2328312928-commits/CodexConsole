@@ -18,6 +18,10 @@ set -Eeuo pipefail
 umask 022
 
 APP_USER=codexconsole
+# Codex runs as its own user, in a group it shares with the console for the workspace only.
+AGENT_USER=codexagent
+SHARED_GROUP=codexws
+AGENT_SOCKET=/run/codex-console/codex.sock
 APP_ROOT=/opt/codex-console
 STATE=/var/lib/codex-console
 ETC=/etc/codex-console
@@ -184,9 +188,29 @@ ok "Caddy $CADDY_VERSION" "Caddy $CADDY_VERSION"
 # ---- the app --------------------------------------------------------------
 
 step 'Installing Codex Console' '安装 Codex Console'
+getent group "$SHARED_GROUP" >/dev/null || groupadd --system "$SHARED_GROUP"
 id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --user-group --home-dir "$STATE" --shell /usr/sbin/nologin "$APP_USER"
-install -d -m 0750 -o "$APP_USER" -g "$APP_USER" "$STATE"
-install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$STATE/data" "$STATE/workspace" "$STATE/codex-home"
+id -u "$AGENT_USER" >/dev/null 2>&1 || useradd --system --gid "$SHARED_GROUP" --home-dir "$STATE/agent" --shell /usr/sbin/nologin "$AGENT_USER"
+usermod -aG "$SHARED_GROUP" "$APP_USER"
+# An install from before Codex had its own user: Codex's folder and the workspace change hands below.
+migrate=0
+if [ -d "$STATE/codex-home" ] && [ "$(stat -c %U "$STATE/codex-home")" != "$AGENT_USER" ]; then migrate=1; fi
+install -d -m 0750 -o "$APP_USER" -g "$SHARED_GROUP" "$STATE"
+# The console's database, keys and secrets: the console only.
+install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$STATE/data"
+# The workspace: both, and files stay in the shared group (setgid).
+install -d -m 2770 -o "$APP_USER" -g "$SHARED_GROUP" "$STATE/workspace"
+# Codex's sign-in and config, and its home for tools; the console only reads saved prompts there.
+install -d -m 2750 -o "$AGENT_USER" -g "$SHARED_GROUP" "$STATE/codex-home"
+install -d -m 0750 -o "$AGENT_USER" -g "$SHARED_GROUP" "$STATE/agent"
+if [ "$migrate" = 1 ]; then
+  chown -R "$AGENT_USER:$SHARED_GROUP" "$STATE/codex-home"
+  find "$STATE/codex-home" -type d -exec chmod g+rx {} +
+  chgrp -R "$SHARED_GROUP" "$STATE/workspace"
+  chmod -R g+rwX "$STATE/workspace"
+  find "$STATE/workspace" -type d -exec chmod g+s {} +
+  ok 'Moved Codex to its own user (codexagent)' '已把 Codex 移到它自己的用户（codexagent）'
+fi
 install -d -m 0755 "$APP_ROOT" "$APP_ROOT/releases"
 install -d -m 0750 -g "$APP_USER" "$ETC"
 
@@ -222,12 +246,22 @@ CC_API_PORT=8788
 CC_API_PUBLIC_ORIGIN=https://$1
 CC_API_PROXY_PROTOCOL=off
 CC_API_TRUST_PROXY=loopback
+CC_CODEX_AGENT_SOCKET=$AGENT_SOCKET
 CODEX_HOME=$STATE/codex-home
 HOME=$STATE
 NODE_ENV=production
 EOF
   chgrp "$APP_USER" "$ETC/env" && chmod 0640 "$ETC/env"
 }
+cat >"$ETC/agent.env" <<EOF
+$MARK
+# Codex's service (codex-console-codex): where it listens and keeps its files.
+CC_CODEX_AGENT_SOCKET=$AGENT_SOCKET
+CODEX_HOME=$STATE/codex-home
+HOME=$STATE/agent
+NODE_ENV=production
+EOF
+chmod 0644 "$ETC/agent.env"
 write_env "$SITE"
 if [ ! -f "$ETC/local.env" ]; then
   printf '%s\n' '# Your own Codex Console settings (see .env.example in the app). The installer never changes this file.' >"$ETC/local.env"
@@ -251,26 +285,70 @@ case "\$cmd" in
     set +a
     cd $APP_ROOT/current
     exec runuser -u $APP_USER -- $NODE_BIN dist/server/cli/setup.js "\$@" ;;
-  status) exec systemctl --no-pager status codex-console caddy ;;
-  logs) exec journalctl -u codex-console -f ;;
-  restart) exec systemctl restart codex-console ;;
+  status) exec systemctl --no-pager status codex-console codex-console-codex caddy ;;
+  logs) exec journalctl -u codex-console -u codex-console-codex -f ;;
+  restart) systemctl restart codex-console-codex && exec systemctl restart codex-console ;;
   confirm) systemctl stop codex-console-guard.timer 2>/dev/null || true ;;
   *) sed -n '2,4p' "\$0" ;;
 esac
 EOF
 chmod 0755 /usr/local/bin/codex-console
 
-cat >/etc/systemd/system/codex-console.service <<EOF
+cat >/etc/systemd/system/codex-console-codex.service <<EOF
 $MARK
 [Unit]
-Description=Codex Console
+Description=Codex for Codex Console (runs Codex as its own user)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+User=$AGENT_USER
+Group=$SHARED_GROUP
+WorkingDirectory=$STATE/agent
+EnvironmentFile=$ETC/agent.env
+ExecStart=$NODE_BIN $APP_ROOT/current/dist/server/cli/codex-agent.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+RuntimeDirectory=codex-console
+RuntimeDirectoryMode=0750
+UMask=0007
+LimitNOFILE=65536
+# Codex may write only to the workspace and its own folders, and never sees the console's
+# data, even in full-access mode. Options that cover /proc or /sys are left out: Codex
+# mounts its own /proc for its sandbox.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=$STATE/workspace $STATE/codex-home $STATE/agent
+InaccessiblePaths=$STATE/data
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/codex-console.service <<EOF
+$MARK
+[Unit]
+Description=Codex Console
+After=network-online.target codex-console-codex.service
+Wants=network-online.target codex-console-codex.service
+# Same /tmp as Codex, so the console can show images Codex saved there.
+JoinsNamespaceOf=codex-console-codex.service
+
+[Service]
+Type=simple
 User=$APP_USER
 Group=$APP_USER
+SupplementaryGroups=$SHARED_GROUP
 WorkingDirectory=$APP_ROOT/current
 EnvironmentFile=$ETC/env
 EnvironmentFile=-$ETC/local.env
@@ -278,10 +356,9 @@ ExecStart=$NODE_BIN dist/server/index.js
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
-UMask=0077
+UMask=0007
 LimitNOFILE=65536
-# Everything outside $STATE is read-only, even in Codex's full-access mode. Options that
-# cover /proc or /sys are left out: Codex mounts its own /proc for its sandbox.
+# Everything outside $STATE is read-only. Codex runs in codex-console-codex.service.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -313,7 +390,8 @@ elif [ -n "$NEW_KEY" ]; then
 fi
 
 step 'Starting the console' '启动控制台'
-systemctl enable --quiet codex-console
+systemctl enable --quiet codex-console-codex codex-console
+systemctl restart codex-console-codex
 systemctl restart codex-console
 up=0
 for _ in $(seq 1 30); do
@@ -322,6 +400,18 @@ for _ in $(seq 1 30); do
 done
 [ "$up" = 1 ] || { journalctl -u codex-console -n 30 --no-pager >&2 || true; die 'The console did not start (log above).' '控制台未能启动（见上面的日志）。'; }
 ok 'Console is running on 127.0.0.1:8787, the API on 127.0.0.1:8788' '控制台运行在 127.0.0.1:8787，API 运行在 127.0.0.1:8788'
+if systemctl is-active --quiet codex-console-codex && [ -S "$AGENT_SOCKET" ]; then
+  ok "Codex runs as its own user ($AGENT_USER)" "Codex 以它自己的用户运行（$AGENT_USER）"
+else
+  journalctl -u codex-console-codex -n 20 --no-pager >&2 || true
+  warn "Codex's service did not start (log above): sudo codex-console logs" 'Codex 的服务未能启动（见上面的日志）：sudo codex-console logs'
+fi
+# The point of the separate user: Codex must not see the console's database, keys or secrets.
+if runuser -u "$AGENT_USER" -- ls "$STATE/data" >/dev/null 2>&1; then
+  warn "Codex's user can read $STATE/data: fix its permissions (owner $APP_USER, mode 0700)." "Codex 的用户可以读取 $STATE/data：请修正其权限（所有者 $APP_USER，权限 0700）。"
+else
+  ok "Codex cannot read the console's data" 'Codex 无法读取控制台的数据'
+fi
 
 # ---- HTTPS ----------------------------------------------------------------
 
@@ -423,10 +513,11 @@ fi
 
 step "Codex's sandbox" 'Codex 沙箱'
 CODEX_BIN=$(cd "$APP_ROOT/current" && "$NODE_BIN" -e 'import("./dist/server/config.js").then((m) => console.log(m.resolvePinnedCodexBin() ?? ""))')
+# Checked the way Codex's service runs it: as its own user, with the same restrictions.
 sandbox_works() {
-  [ -n "$CODEX_BIN" ] && systemd-run --quiet --wait --pipe --collect -p User="$APP_USER" -p NoNewPrivileges=yes -p PrivateTmp=yes \
-    -p ProtectSystem=strict -p ReadWritePaths="$STATE" -p ProtectHome=yes --setenv=HOME="$STATE" --setenv=CODEX_HOME="$STATE/codex-home" \
-    "$CODEX_BIN" sandbox -- /bin/true >/dev/null 2>&1
+  [ -n "$CODEX_BIN" ] && systemd-run --quiet --wait --pipe --collect -p User="$AGENT_USER" -p Group="$SHARED_GROUP" -p NoNewPrivileges=yes -p PrivateTmp=yes \
+    -p ProtectSystem=strict -p ReadWritePaths="$STATE/workspace $STATE/codex-home $STATE/agent" -p InaccessiblePaths="$STATE/data" -p ProtectHome=yes \
+    --setenv=HOME="$STATE/agent" --setenv=CODEX_HOME="$STATE/codex-home" "$CODEX_BIN" sandbox -- /bin/true >/dev/null 2>&1
 }
 if sandbox_works; then
   ok "Codex $("$CODEX_BIN" --version 2>/dev/null | awk '{print $2}') can sandbox commands here" "Codex $("$CODEX_BIN" --version 2>/dev/null | awk '{print $2}') 可以在本机使用沙箱运行命令"
