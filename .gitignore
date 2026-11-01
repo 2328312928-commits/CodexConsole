@@ -5,6 +5,9 @@ coverage/
 # the deploy program's packaged files and downloaded Node.js binaries
 deployer/release/
 deployer/.cache/
+# the Windows package and the binaries it is built from
+/release/
+/.cache/
 
 # local configuration and secrets: never commit these
 .env

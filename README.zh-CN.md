@@ -54,6 +54,17 @@
 
 如果你习惯用终端，在本仓库中运行 `./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7` 效果相同，并会在最后输出设置链接。部署的全部细节（两种方式、它会修改什么、更新、备份、故障排查）：**[docs/DEPLOY.zh-CN.md](docs/DEPLOY.zh-CN.md)**。
 
+## 用 Tailscale 在自己的电脑上运行（无需服务器）
+
+不需要服务器：控制台运行在你自己的电脑上，[Tailscale](https://tailscale.com) 为它提供一个固定的 https 地址，例如 `https://my-pc.tail1234.ts.net`。默认通过 Tailscale Funnel 公开，任何浏览器都能打开；加上 `--tailnet-only` 则只对你自己的 Tailscale 设备开放。两种方式都由密钥、限流和管理员密码保护。
+
+1. 在这台电脑上安装 Tailscale 并登录，然后在管理后台开启 MagicDNS 和 **HTTPS Certificates**（只需一次）。
+2. **Windows：**解压 `codex-console-windows-x64.zip`，双击 **Start Codex Console.cmd**。**Linux 或 macOS：**`npm ci && npm run build && npm run tailscale`。
+3. 窗口会显示访问地址。第一次还会打开设置页面（管理员密码、验证器和你的第一把密钥），然后：**管理后台 → Codex → 用 ChatGPT 登录**。
+4. 在其他任何电脑或手机上打开这个地址，用 API 密钥登录。更多密钥：**管理后台 → 密钥 → 新建密钥**。
+
+全部细节（Funnel 或仅限 tailnet、第一次启动、Windows 包、故障排查）：**[docs/TAILSCALE.zh-CN.md](docs/TAILSCALE.zh-CN.md)**。
+
 ## 在自己的电脑上运行
 
 ```bash
@@ -69,7 +80,7 @@ npm start
 
 Codex 默认在 `~/codex-workspace/` 中工作，每个会话一个文件夹。控制台自己的数据（数据库、密钥材料、媒体）保存在 `~/.codexconsole/`，只有所有者可访问。本仓库中不存放任何机密。
 
-如果没有公网服务器、想从别处访问家里的机器，可以用 Tailscale（`tailscale serve --bg --https=443 http://127.0.0.1:8787`，然后在 `.env` 中设置 `CC_PUBLIC_ORIGIN=https://<机器名>.<tailnet>.ts.net` 和 `CC_TRUST_PROXY=loopback`），或使用你自己的 TLS 证书（`CC_HOST=0.0.0.0`、`CC_TLS_CERT`、`CC_TLS_KEY`、`CC_PUBLIC_ORIGIN`）。除 `127.0.0.1` 外，服务器拒绝明文 HTTP。全部设置见 [`.env.example`](.env.example)。systemd 用户服务示例见 [`deploy/codex-console.service`](deploy/codex-console.service)。
+如果没有公网服务器、想从别处访问家里的机器，可以用 `npm run tailscale`（见上文），或使用你自己的 TLS 证书（`CC_HOST=0.0.0.0`、`CC_TLS_CERT`、`CC_TLS_KEY`、`CC_PUBLIC_ORIGIN`）。除 `127.0.0.1` 外，服务器拒绝明文 HTTP。全部设置见 [`.env.example`](.env.example)。systemd 用户服务示例见 [`deploy/codex-console.service`](deploy/codex-console.service)。
 
 ## 密钥与登录
 
@@ -159,6 +170,7 @@ cd deployer && npm test       # 部署程序的测试（针对模拟的 SSH 服�
 | `shared/` | 类型、协议子集（`shared/codex.ts`）以及 EN / 中文词典（`shared/i18n/`） |
 | `deploy/` | `deploy.sh`（在你的电脑上运行）、`install.sh`（在服务器上运行）、示例 |
 | `deployer/` | 部署程序：在你电脑上打开一个页面，通过 SSH 完成部署。`npm run package` 生成可执行文件 |
+| `scripts/` | `dev.mjs`（开发用）、`portable.mjs`（Windows 包：`npm run package:windows`） |
 | `test/` | Vitest 测试和模拟的 Codex |
 
 新增界面文字时，需要同时在 `shared/i18n/en.ts` 和 `shared/i18n/zh-CN.ts` 中添加键，否则 TypeScript 和 i18n 测试会失败。

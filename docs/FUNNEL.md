@@ -2,6 +2,8 @@
 
 [中文版](FUNNEL.zh-CN.md)
 
+> This page puts only the public API (`/v1`) on Funnel. To run the whole console on your own computer with a Tailscale address, use `npm run tailscale`: [TAILSCALE.md](TAILSCALE.md).
+
 This guide is for running the console **at home**, without a public server: it makes the **public API** (`/v1`, API keys only) reachable from the internet, so your own scripts can call it from anywhere. The console UI and the admin area are **not** exposed: they stay on `localhost`, or on your tailnet through `tailscale serve`. To put the whole console on a public server instead, use [DEPLOY.md](DEPLOY.md).
 
 Nothing here happens automatically. You run each command yourself, and you can undo it at any time ([Turning it off](#turning-it-off)).

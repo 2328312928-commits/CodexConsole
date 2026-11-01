@@ -83,6 +83,13 @@ Hitting a limit is recorded in the security log; repeated identical events are c
 - **Maintenance.** fail2ban watches SSH; security updates install automatically. `--harden-ssh` turns off SSH passwords, but only after `deploy.sh` has logged in with a key.
 - **No lockout.** Turning the firewall on or changing SSH arms a 10-minute timer that undoes the change unless a new SSH login confirms it.
 
+## Your own computer with Tailscale (`npm run tailscale`)
+
+- **Funnel (default) is public**: anyone with the address reaches the sign-in page, as with a public server. `--tailnet-only` limits it to your Tailscale devices.
+- The console listens on `127.0.0.1` only; Tailscale terminates HTTPS on your computer with a certificate for your `ts.net` name, and Funnel's relays pass on encrypted traffic only.
+- Tailscale sets `X-Forwarded-For` to each caller's real address (replacing the caller's own), and the console trusts it from loopback only, so rate limits and logs see real addresses.
+- Codex runs as your own user on that computer, without the separate system user a deployed server has: a key with full access can do what you can do there. Enabling HTTPS publishes the computer's Tailscale name in Certificate Transparency logs.
+
 ## MCP servers
 
 - Managed only from the admin area, or by keys with `mcp:manage`. Every add, change, removal and sign-in is in the security log.

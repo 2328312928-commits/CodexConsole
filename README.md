@@ -54,6 +54,17 @@ Press **Deploy** again to update; your data stays on the server. The program car
 
 From a terminal, `./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7` in this repository does the same and prints the setup link at the end. Everything about the deployment (both ways, what it changes, updating, backups, troubleshooting): **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
+## Run it on your own computer with Tailscale (no server)
+
+No server needed: the console runs on your own computer, and [Tailscale](https://tailscale.com) gives it a fixed https address such as `https://my-pc.tail1234.ts.net`. By default it is public through Tailscale Funnel, so any browser can open it; `--tailnet-only` keeps it to your own Tailscale devices. Keys, rate limits and the admin password protect it either way.
+
+1. Install Tailscale on the computer, sign in, and in the admin console turn on MagicDNS and **HTTPS Certificates** (once).
+2. **Windows:** unzip `codex-console-windows-x64.zip` and double-click **Start Codex Console.cmd**. **Linux or macOS:** `npm ci && npm run build && npm run tailscale`.
+3. The window shows the address. The first time it also opens the setup page (admin password, authenticator, your first key), then: **Admin → Codex → sign in with ChatGPT**.
+4. On any other computer or phone, open the address and sign in with an API key. More keys: **Admin → Keys → New key**.
+
+Everything about it (Funnel or tailnet only, the first start, the Windows package, troubleshooting): **[docs/TAILSCALE.md](docs/TAILSCALE.md)**.
+
 ## Run it on your own machine
 
 ```bash
@@ -69,7 +80,7 @@ Upgrading from a version that paired devices? Pairings are gone; your owner acco
 
 Codex works inside `~/codex-workspace/` by default, in one folder per session. The console's own data (database, secrets, media) lives in `~/.codexconsole/` with owner-only permissions. Nothing secret goes in this repository.
 
-To reach a home machine from elsewhere without a public server, use Tailscale (`tailscale serve --bg --https=443 http://127.0.0.1:8787`, then `CC_PUBLIC_ORIGIN=https://<machine>.<tailnet>.ts.net` and `CC_TRUST_PROXY=loopback` in `.env`), or your own TLS certificate (`CC_HOST=0.0.0.0`, `CC_TLS_CERT`, `CC_TLS_KEY`, `CC_PUBLIC_ORIGIN`). The server refuses plain HTTP on anything but `127.0.0.1`. All settings: [`.env.example`](.env.example). A systemd user unit is in [`deploy/codex-console.service`](deploy/codex-console.service).
+To reach a home machine from elsewhere without a public server, use `npm run tailscale` (above), or your own TLS certificate (`CC_HOST=0.0.0.0`, `CC_TLS_CERT`, `CC_TLS_KEY`, `CC_PUBLIC_ORIGIN`). The server refuses plain HTTP on anything but `127.0.0.1`. All settings: [`.env.example`](.env.example). A systemd user unit is in [`deploy/codex-console.service`](deploy/codex-console.service).
 
 ## Keys and signing in
 
@@ -159,6 +170,7 @@ The fake app-server in `test/fake-codex/` implements the same protocol shapes as
 | `shared/` | Types, the protocol subset (`shared/codex.ts`), and the EN / 中文 dictionaries (`shared/i18n/`) |
 | `deploy/` | `deploy.sh` (run on your computer), `install.sh` (runs on the server), examples |
 | `deployer/` | The deploy program: a page on your computer that deploys over SSH. `npm run package` builds the executables |
+| `scripts/` | `dev.mjs` (development), `portable.mjs` (the Windows package: `npm run package:windows`) |
 | `test/` | Vitest suites and the fake Codex |
 
 Adding UI text means adding the key to both `shared/i18n/en.ts` and `shared/i18n/zh-CN.ts`. TypeScript and the i18n test fail otherwise.

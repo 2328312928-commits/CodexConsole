@@ -2,6 +2,8 @@
 
 [English](FUNNEL.md)
 
+> 本页只把公网 API（`/v1`）放到 Funnel 上。要在你自己的电脑上运行整个控制台并使用 Tailscale 地址，请用 `npm run tailscale`：[TAILSCALE.zh-CN.md](TAILSCALE.zh-CN.md)。
+
 本指南适用于**在家里**运行控制台、没有公网服务器的情况：它让**公网 API**（`/v1`，只接受 API 密钥）可以从互联网访问，这样你自己的脚本在任何地方都能调用它。控制台页面和管理区**不会**对外开放：它们仍然只在 `localhost` 上，或通过 `tailscale serve` 只在你的 tailnet 内可用。如果想把整个控制台部署到公网服务器上，请看 [DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)。
 
 这里的一切都不会自动发生。每条命令都由你自己运行，并且随时可以撤销（见[关闭](#关闭)）。

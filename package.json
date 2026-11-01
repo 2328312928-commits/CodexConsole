@@ -15,6 +15,8 @@
     "start": "node dist/server/index.js",
     "setup": "node dist/server/cli/setup.js",
     "codex:check": "node dist/server/cli/codex-check.js",
+    "tailscale": "node dist/server/cli/tailscale.js",
+    "package:windows": "node scripts/portable.mjs",
     "dev": "node scripts/dev.mjs",
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "vitest run"
