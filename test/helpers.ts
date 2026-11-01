@@ -35,7 +35,7 @@ export interface Harness {
 }
 
 export async function makeHarness(
-  opts: { signedIn?: boolean; env?: Record<string, string>; fakeEnv?: Record<string, string>; relay?: { maxAppServers?: number } } = {},
+  opts: { signedIn?: boolean; owner?: boolean; env?: Record<string, string>; fakeEnv?: Record<string, string>; relay?: { maxAppServers?: number } } = {},
 ): Promise<Harness> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-'));
   const workspace = path.join(root, 'workspace');
@@ -89,7 +89,7 @@ export async function makeHarness(
   for (let i = 0; i < 100 && runtime.bridge.status.account === null && opts.signedIn !== false; i++) await new Promise((r) => setTimeout(r, 20));
   const password = 'correct horse battery staple';
   const totpSecret = generateTotpSecret();
-  await runtime.owner.create(password, totpSecret);
+  if (opts.owner !== false) await runtime.owner.create(password, totpSecret);
   return {
     root,
     workspace: runtime.workspace.realRoot,

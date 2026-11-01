@@ -42,27 +42,17 @@ The console drives Codex through `codex app-server`. That is Codex's official JS
 
 ## Deploy to your server (the main way)
 
-You need a Linux server (Ubuntu 22.04/24.04 or Debian 12/13, x86-64 or ARM64, 1 GB RAM or more) that you can reach with SSH, and either a domain pointing at it or just its public IPv4 address. Ports 80 and 443 must be open in your provider's firewall. On your own computer, in this repository:
+You need a Linux server (Ubuntu 22.04/24.04 or Debian 12/13, x86-64 or ARM64, 1 GB RAM or more) that you can sign in to with SSH, and either a domain pointing at it or just its public IPv4 address. Ports 80 and 443 must be open in your provider's firewall. No terminal needed:
 
-```bash
-./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7
-```
+1. **Run the deploy program** on your computer (Windows, macOS or Linux: [where to get it](docs/DEPLOY.md#the-deploy-program)). It opens a page in your browser.
+2. **Fill in your server** (address, user, password or SSH key), choose **its IP address** or **your domain**, and press **Deploy**. The first time, confirm the server's fingerprint. Installing takes a few minutes.
+3. **Open the setup page** it gives you: choose an admin password, scan the QR code with your authenticator app, and save your first key. That browser is now signed in.
+4. **Admin → Codex → sign in with ChatGPT.**
+5. **More devices:** **Admin → Keys → New key**: type a name and, if you like, a token quota, then **Create key**. **Revoke** there signs a key out everywhere at once.
 
-or with a domain:
+Press **Deploy** again to update; your data stays on the server. The program carries the console's own files (never `.env`, data or keys), builds them on the server, installs Node.js and Caddy, gets an HTTPS certificate, and sets up a locked-down system service, a firewall, fail2ban and automatic security updates.
 
-```bash
-./deploy/deploy.sh me@my-server --domain console.example.com --email me@example.com
-```
-
-The script copies the app over SSH (only the files git tracks: never `.env`, data or keys), builds it on the server, installs Node.js and Caddy, gets an HTTPS certificate, and sets up a locked-down system service, a firewall, fail2ban and automatic security updates. On the first install it asks you, in that terminal, for an admin password and an authenticator, then prints **your first API key**.
-
-Then:
-
-1. Open the address it shows and paste the key. That is all a browser needs.
-2. Open **Admin** (password + authenticator code) → **Codex** → sign in with your ChatGPT plan.
-3. For each other device, issue its own key: **Admin → Keys → New key**, or on the server `sudo codex-console setup --new-key "Phone"`.
-
-Run the same command again to update; your data stays on the server. Everything about the deployment (options, what it changes, updating, backups, troubleshooting): **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+From a terminal, `./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7` in this repository does the same and prints the setup link at the end. Everything about the deployment (both ways, what it changes, updating, backups, troubleshooting): **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ## Run it on your own machine
 
@@ -73,7 +63,7 @@ npm run setup              # admin password + authenticator + your first API key
 npm start
 ```
 
-Open `http://127.0.0.1:8787`, paste the key, then sign Codex in from **Admin → Codex**. `npm run setup -- --lang zh-CN` runs the setup in Chinese.
+Open `http://127.0.0.1:8787`, paste the key, then sign Codex in from **Admin → Codex**. `npm run setup -- --lang zh-CN` runs the setup in Chinese. Or skip `npm run setup`: `npm start` then prints a one-time setup link that does the same in your browser.
 
 Upgrading from a version that paired devices? Pairings are gone; your owner account and API keys stay (existing keys stay API-only). Run `npm run setup -- --new-key "Laptop"` once to get a key that signs in to the console.
 
@@ -138,7 +128,7 @@ Full details, and what to do if a device or key is lost: [SECURITY.md](SECURITY.
 
 ## Recovery commands
 
-On a deployed server use `sudo codex-console setup …`; on your own machine `npm run setup -- …`.
+On a deployed server use `sudo codex-console setup …` (or, without a terminal, the deploy program's **Other tasks** for a recovery key or a new setup link); on your own machine `npm run setup -- …`.
 
 | Option | Effect |
 | --- | --- |
@@ -148,6 +138,7 @@ On a deployed server use `sudo codex-console setup …`; on your own machine `np
 | `--sign-out-all` | End every console sign-in |
 | `--reset-password` | New admin password; ends all sign-ins |
 | `--reset-totp` | Enrol a new authenticator; ends all sign-ins |
+| `--setup-link` | Print a new one-time setup link (only until setup is finished) |
 
 ## Development
 
@@ -156,6 +147,7 @@ npm run dev -- --fake-codex   # UI + server with a fake Codex: no login, no Open
 npm run dev                   # same, with your real Codex
 npm test                      # unit + integration tests (use the fake Codex)
 npm run typecheck
+cd deployer && npm test       # the deploy program's tests (against a fake SSH server)
 ```
 
 The fake app-server in `test/fake-codex/` implements the same protocol shapes as Codex 0.164.0. Prompt keywords make it exercise features: `approve`, `permission`, `question`, `elicit`, `mcp`, `image`, `video`, `edit`, `slow`, `steady`, `fail`, `fail limit`.
@@ -166,6 +158,7 @@ The fake app-server in `test/fake-codex/` implements the same protocol shapes as
 | `web/` | React UI (Vite) |
 | `shared/` | Types, the protocol subset (`shared/codex.ts`), and the EN / 中文 dictionaries (`shared/i18n/`) |
 | `deploy/` | `deploy.sh` (run on your computer), `install.sh` (runs on the server), examples |
+| `deployer/` | The deploy program: a page on your computer that deploys over SSH. `npm run package` builds the executables |
 | `test/` | Vitest suites and the fake Codex |
 
 Adding UI text means adding the key to both `shared/i18n/en.ts` and `shared/i18n/zh-CN.ts`. TypeScript and the i18n test fail otherwise.

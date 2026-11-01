@@ -3,6 +3,7 @@ import type { AuthState } from '../../shared/api.js';
 import { keyCanAllow, type ApiKey, type ApiKeyStore } from '../auth/apiKeys.js';
 import type { LoginSessionRow, LoginSessionStore } from '../auth/loginSessions.js';
 import type { OwnerStore } from '../auth/owner.js';
+import type { SetupLinkStore } from '../auth/setupLink.js';
 import type { CodexBridge } from '../codex/bridge.js';
 import type { McpManager } from '../codex/mcp.js';
 import type { PromptQueue } from '../codex/queue.js';
@@ -44,6 +45,7 @@ export interface AppDeps {
   config: AppConfig;
   db: Db;
   owner: OwnerStore;
+  setupLinks: SetupLinkStore;
   logins: LoginSessionStore;
   sessions: SessionStore;
   requests: RequestLog;

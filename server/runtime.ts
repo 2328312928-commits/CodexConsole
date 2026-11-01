@@ -2,6 +2,7 @@ import path from 'node:path';
 import { ApiKeyStore } from './auth/apiKeys.js';
 import { LoginSessionStore } from './auth/loginSessions.js';
 import { OwnerStore } from './auth/owner.js';
+import { SetupLinkStore } from './auth/setupLink.js';
 import { CodexBridge, type BridgeLogger } from './codex/bridge.js';
 import { McpManager } from './codex/mcp.js';
 import { PromptQueue } from './codex/queue.js';
@@ -30,6 +31,7 @@ export function openStores(config: AppConfig, warn: (msg: string) => void = cons
     db,
     secrets,
     owner: new OwnerStore(db, secrets.pepper),
+    setupLinks: new SetupLinkStore(db, secrets.pepper),
     logins: new LoginSessionStore(db, secrets.pepper, config.sessions),
     keys: new ApiKeyStore(db, secrets.pepper),
     audit: new AuditLog(db),
@@ -116,6 +118,7 @@ export async function createRuntime(config: AppConfig, opts: RuntimeOptions): Pr
     config,
     db,
     owner: stores.owner,
+    setupLinks: stores.setupLinks,
     logins: stores.logins,
     keys: stores.keys,
     audit: stores.audit,

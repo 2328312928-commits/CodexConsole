@@ -15,11 +15,12 @@ import { registerMcpRoutes } from './routes/mcp.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerFileRoutes } from './routes/files.js';
 import { registerSessionRoutes } from './routes/sessions.js';
+import { registerSetupRoutes } from './routes/setup.js';
 
 const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const UNAUTH_API_PER_MIN = 120;
 /** Client-side routes of the web app; every other non-API path is a 404. */
-const APP_ROUTES = ['/', '/s/:sessionId', '/admin', '/admin/:tab'];
+const APP_ROUTES = ['/', '/setup', '/s/:sessionId', '/admin', '/admin/:tab'];
 
 /**
  * Whether the /api guards apply. The router matches on the *decoded* path, so the raw
@@ -155,6 +156,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: FastifyServerOpti
   app.setErrorHandler(handleError);
 
   registerAuthRoutes(app, deps);
+  registerSetupRoutes(app, deps);
   registerSessionRoutes(app, deps);
   registerFileRoutes(app, deps);
   registerAdminRoutes(app, deps);

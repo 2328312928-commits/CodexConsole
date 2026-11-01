@@ -153,6 +153,8 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
   const [form, setForm] = useState<KeyForm>(() => (edit ? formFromKey(edit) : blankForm()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // A new key needs only a name (and a quota if you like); the rest waits behind "More options".
+  const [more, setMore] = useState(Boolean(edit));
   const set = <K extends keyof KeyForm>(k: K, v: KeyForm[K]) => setForm((f) => ({ ...f, [k]: v }));
   const setLimit = (k: keyof ApiKeyLimits, v: string) => setForm((f) => ({ ...f, limits: { ...f.limits, [k]: Number(v) } }));
   const toggleScope = (s: ApiKeyScope) => set('scopes', form.scopes.includes(s) ? form.scopes.filter((x) => x !== s) : [...form.scopes, s]);
@@ -205,20 +207,49 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
             <label htmlFor="key-label">{t('keys.label')}</label>
             <input id="key-label" value={form.label} onChange={(e) => set('label', e.target.value)} maxLength={60} required placeholder={t('keys.labelPlaceholder')} />
           </div>
+          {more ? (
+            <div className="field">
+              <label htmlFor="key-expiry">{t('devices.expires')}</label>
+              <select id="key-expiry" value={form.expiry} onChange={(e) => set('expiry', e.target.value)}>
+                {edit ? <option value="">{t('keys.expiryKeep', { when: edit.expiresAt ? fmtDateTime(lang, edit.expiresAt) : t('devices.expiresNever') })}</option> : null}
+                <option value="never">{t('devices.expiresNever')}</option>
+                {EXPIRY_DAYS.map((d) => (
+                  <option key={d} value={String(d)}>
+                    {t('devices.expiresDays', { days: d })}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid-2 tight">
           <div className="field">
-            <label htmlFor="key-expiry">{t('devices.expires')}</label>
-            <select id="key-expiry" value={form.expiry} onChange={(e) => set('expiry', e.target.value)}>
-              {edit ? <option value="">{t('keys.expiryKeep', { when: edit.expiresAt ? fmtDateTime(lang, edit.expiresAt) : t('devices.expiresNever') })}</option> : null}
-              <option value="never">{t('devices.expiresNever')}</option>
-              {EXPIRY_DAYS.map((d) => (
-                <option key={d} value={String(d)}>
-                  {t('devices.expiresDays', { days: d })}
+            <label htmlFor="key-quota">{t('keys.quotaTokens')}</label>
+            <input id="key-quota" type="number" min={1} value={form.quotaTokens} onChange={(e) => set('quotaTokens', e.target.value)} placeholder={t('keys.quotaPlaceholder')} />
+            <span className="hint">{t('keys.quotaHint')}</span>
+          </div>
+          <div className="field">
+            <label htmlFor="key-period">{t('keys.quotaPeriod')}</label>
+            <select id="key-period" value={form.quotaPeriod} onChange={(e) => set('quotaPeriod', e.target.value as QuotaPeriod)}>
+              {QUOTA_PERIODS.map((p) => (
+                <option key={p} value={p}>
+                  {t(`keys.period.${p}`)}
                 </option>
               ))}
             </select>
           </div>
         </div>
 
+        {!edit ? (
+          <button type="button" className="btn ghost small" aria-expanded={more} onClick={() => setMore((m) => !m)} style={{ marginBottom: 10 }}>
+            <Icon name={more ? 'chevronUp' : 'chevronDown'} size={14} />
+            {more ? t('keys.fewerOptions') : t('keys.moreOptions')}
+          </button>
+        ) : null}
+
+        {more ? (
+          <>
         <div className="field">
           <span className="label-text">{t('keys.consoleAccess')}</span>
           <div className="seg-ctl" role="radiogroup" aria-label={t('keys.consoleAccess')}>
@@ -253,21 +284,6 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
         </fieldset>
 
         <div className="grid-2 tight">
-          <div className="field">
-            <label htmlFor="key-quota">{t('keys.quotaTokens')}</label>
-            <input id="key-quota" type="number" min={1} value={form.quotaTokens} onChange={(e) => set('quotaTokens', e.target.value)} placeholder={t('keys.quotaPlaceholder')} />
-            <span className="hint">{t('keys.quotaHint')}</span>
-          </div>
-          <div className="field">
-            <label htmlFor="key-period">{t('keys.quotaPeriod')}</label>
-            <select id="key-period" value={form.quotaPeriod} onChange={(e) => set('quotaPeriod', e.target.value as QuotaPeriod)}>
-              {QUOTA_PERIODS.map((p) => (
-                <option key={p} value={p}>
-                  {t(`keys.period.${p}`)}
-                </option>
-              ))}
-            </select>
-          </div>
           <div className="field">
             <label htmlFor="key-sandbox">{t('keys.maxSandbox')}</label>
             <select id="key-sandbox" value={form.maxSandbox} onChange={(e) => set('maxSandbox', e.target.value as SandboxMode)}>
@@ -331,6 +347,8 @@ function KeyFormDialog({ edit, onClose, onCreated, onSaved }: { edit: ApiKeyInfo
           <Icon name="info" />
           <div>{t('keys.readsNotSandboxed')}</div>
         </div>
+          </>
+        ) : null}
         <ErrorAlert error={error} />
         <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
           <button type="button" className="btn" onClick={onClose}>

@@ -1,0 +1,1094 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Deploy Codex Console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a78d6'/%3E%3Cpath d='M9 11l5 5-5 5M16 22h7' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style nonce="__NONCE__">
+:root {
+  color-scheme: light;
+  --bg: #f6f6f7;
+  --surface: #ffffff;
+  --ink: #101114;
+  --ink-2: #3d4049;
+  --muted: #6c707d;
+  --border: rgba(16, 17, 20, 0.08);
+  --border-strong: rgba(16, 17, 20, 0.14);
+  --field: #fbfbfc;
+  --accent: #5b5bd6;
+  --accent-hover: #4f4fc9;
+  --accent-wash: #eff0ff;
+  --on-accent: #ffffff;
+  --good: #12a150;
+  --good-ink: #0b7a3b;
+  --good-wash: #e8f6ee;
+  --warning-ink: #8a5800;
+  --warning-wash: #fff6e0;
+  --critical: #dc3d43;
+  --critical-ink: #b8282e;
+  --critical-wash: #fdecec;
+  --code-block: #0f1117;
+  --code-block-ink: #e6e7ee;
+  --ring: 0 0 0 3px rgba(91, 91, 214, 0.22);
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow: 0 1px 2px rgba(16, 17, 20, 0.04), 0 16px 40px -12px rgba(16, 17, 20, 0.16);
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0b0c0f;
+    --surface: #131419;
+    --ink: #ececf1;
+    --ink-2: #c5c7d0;
+    --muted: #8b90a0;
+    --border: rgba(255, 255, 255, 0.07);
+    --border-strong: rgba(255, 255, 255, 0.13);
+    --field: #0f1014;
+    --accent: #7c7cf0;
+    --accent-hover: #8f8ff4;
+    --accent-wash: #1d1e3d;
+    --good: #2bb673;
+    --good-ink: #4cd492;
+    --good-wash: #12291d;
+    --warning-ink: #f4bd4f;
+    --warning-wash: #2c2410;
+    --critical: #e5484d;
+    --critical-ink: #ff7b80;
+    --critical-wash: #331a1c;
+    --code-block: #0d0e12;
+    --ring: 0 0 0 3px rgba(124, 124, 240, 0.3);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px -12px rgba(0, 0, 0, 0.55);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font); -webkit-font-smoothing: antialiased; }
+[hidden] { display: none !important; }
+.wrap { max-width: 720px; margin: 0 auto; padding: 32px 16px 48px; }
+.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.brand { display: flex; gap: 14px; align-items: flex-start; }
+.brand svg { flex: none; width: 42px; height: 42px; }
+h1 { font-size: 22px; line-height: 1.25; margin: 2px 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 16px; margin: 0 0 16px; display: flex; align-items: center; gap: 10px; }
+.subtitle { margin: 0; color: var(--muted); max-width: 52ch; }
+.num { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-wash); color: var(--accent); font-size: 13px; font-weight: 700; }
+.hint { color: var(--muted); font-size: 13px; display: block; margin-top: 5px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px; margin-bottom: 16px; }
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
+.field { margin-bottom: 14px; display: flex; flex-direction: column; }
+.field:last-child { margin-bottom: 0; }
+label, .label { font-weight: 600; font-size: 13.5px; margin-bottom: 6px; color: var(--ink-2); }
+input:not([type]), input[type=text], input[type=password], input[type=number], input[type=email], select {
+  font: inherit; color: inherit; background: var(--field); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 8px 12px; width: 100%; min-height: 40px;
+}
+input::placeholder { color: var(--muted); opacity: 0.7; }
+input:focus, select:focus { outline: none; box-shadow: var(--ring); border-color: var(--accent); }
+button:focus-visible, a:focus-visible, summary:focus-visible { outline: none; box-shadow: var(--ring); }
+.invalid { border-color: var(--critical) !important; }
+.grid { display: grid; grid-template-columns: 1fr 120px; gap: 12px; }
+.grid > .field { margin-bottom: 0; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > select, .row > input { flex: 1; min-width: 0; }
+.seg { display: inline-flex; background: var(--field); border: 1px solid var(--border-strong); border-radius: 10px; padding: 3px; gap: 3px; width: fit-content; }
+.seg label { margin: 0; font-weight: 500; position: relative; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg span { display: block; padding: 6px 16px; border-radius: 7px; cursor: pointer; color: var(--muted); }
+.seg input:checked + span { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14); }
+.seg input:focus-visible + span { box-shadow: var(--ring); }
+.choice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); margin-bottom: 10px; cursor: pointer; font-weight: 400; color: var(--ink); }
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-wash); }
+.choice input { margin: 4px 0 0; accent-color: var(--accent); flex: none; }
+.choice strong { display: block; font-weight: 600; }
+.choice .hint { margin-top: 2px; }
+.indent { margin-left: 30px; }
+.btn {
+  font: inherit; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink);
+  padding: 8px 16px; min-height: 40px; cursor: pointer; text-decoration: none; white-space: nowrap;
+}
+.btn:hover { background: var(--bg); }
+.btn svg { width: 17px; height: 17px; flex: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.danger { background: var(--critical); border-color: var(--critical); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.btn.ghost:hover { background: var(--surface); color: var(--ink); }
+.btn.small { min-height: 32px; padding: 4px 11px; font-size: 13.5px; }
+.btn.big { min-height: 46px; padding: 10px 26px; font-size: 16px; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 4px; }
+#form { margin-bottom: 20px; }
+.actions .hint { margin: 0 auto 0 0; max-width: 40ch; }
+.alert { display: flex; gap: 10px; align-items: flex-start; border-radius: var(--radius-sm); padding: 11px 14px; margin-top: 14px; font-size: 14px; }
+.alert > svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.alert > div { min-width: 0; flex: 1; }
+.alert.danger { background: var(--critical-wash); color: var(--critical-ink); }
+.alert.warn { background: var(--warning-wash); color: var(--warning-ink); }
+.alert.good { background: var(--good-wash); color: var(--good-ink); }
+.alert .btn { margin-top: 8px; }
+.detail { display: block; margin-top: 6px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; opacity: 0.85; }
+.progress-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.progress-head h2 { margin: 0; }
+.progress-head svg { width: 20px; height: 20px; flex: none; }
+.progress-head .ok { color: var(--good); }
+.progress-head .bad { color: var(--critical); }
+.spinner { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 2px solid var(--accent-wash); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.steps { list-style: none; display: flex; gap: 8px; padding: 0; margin: 0 0 14px; }
+.steps li { flex: 1; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--muted); }
+.steps .bar { height: 4px; border-radius: 4px; background: var(--border-strong); }
+.steps li.active { color: var(--ink); font-weight: 600; }
+.steps li.active .bar { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.steps li.done { color: var(--ink-2); }
+.steps li.done .bar { background: var(--good); }
+.steps li.failed { color: var(--critical-ink); font-weight: 600; }
+.steps li.failed .bar { background: var(--critical); }
+@keyframes pulse { 50% { opacity: 0.4; } }
+details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; color: var(--ink-2); width: fit-content; border-radius: 6px; }
+pre.log { background: var(--code-block); color: var(--code-block-ink); font: 12px/1.5 var(--mono); padding: 12px 14px; border-radius: var(--radius-sm); max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 10px 0 0; }
+.result-head { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.result-head h2 { margin: 0; font-size: 18px; }
+.badge { width: 34px; height: 34px; flex: none; border-radius: 50%; background: var(--good-wash); color: var(--good-ink); display: grid; place-items: center; }
+.badge svg { width: 18px; height: 18px; }
+.result p { margin: 0 0 10px; }
+.linkrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 14px 0 8px; }
+.mono { font-family: var(--mono); font-size: 12.5px; word-break: break-all; color: var(--muted); }
+.secret { font-family: var(--mono); font-size: 14px; word-break: break-all; background: var(--field); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; margin: 4px 0 10px; }
+.tools > summary { font-size: 15px; color: var(--ink); }
+.tools[open] > summary { margin-bottom: 4px; }
+.tool { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.tool p { margin: 0 0 10px; }
+footer { text-align: center; margin-top: 28px; }
+footer .hint { margin: 4px auto; max-width: 60ch; }
+.lang { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 9px; padding: 2px; flex: none; background: var(--field); }
+.lang button { font: inherit; font-size: 13px; padding: 4px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+.lang button[aria-pressed=true] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14); }
+dialog { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--ink); box-shadow: var(--shadow); padding: 22px; max-width: 540px; width: calc(100% - 32px); }
+dialog::backdrop { background: rgba(10, 11, 15, 0.5); }
+dialog h3 { margin: 0 0 10px; font-size: 17px; display: flex; gap: 8px; align-items: center; }
+dialog h3 svg { width: 20px; height: 20px; flex: none; }
+dialog .warn-ink { color: var(--critical); }
+dialog p { margin: 0 0 8px; }
+.fp { font-family: var(--mono); font-size: 13px; background: var(--field); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; word-break: break-all; margin: 4px 0 12px; }
+.fp-label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.screen { min-height: 100vh; display: grid; place-items: center; text-align: center; padding: 24px; }
+.screen h1 { margin-bottom: 8px; }
+.screen p { color: var(--muted); margin: 0; }
+@media (max-width: 560px) {
+  .wrap { padding-top: 20px; }
+  .top { flex-direction: column-reverse; }
+  .grid { grid-template-columns: 1fr; }
+  .actions { flex-wrap: wrap; }
+  .actions .hint { flex-basis: 100%; }
+  .indent { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<div class="wrap" id="app" hidden>
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#2a78d6"/><path d="M9 11l5 5-5 5M16 22h7" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div>
+        <h1 data-t="title"></h1>
+        <p class="subtitle" data-t="subtitle"></p>
+      </div>
+    </div>
+    <div class="lang" role="group" aria-label="Language / 语言">
+      <button type="button" data-lang="en">EN</button>
+      <button type="button" data-lang="zh-CN">中文</button>
+    </div>
+  </header>
+
+  <form id="form" novalidate autocomplete="off">
+    <fieldset class="plain" id="fields">
+      <section class="card">
+        <h2><span class="num">1</span><span data-t="server.title"></span></h2>
+        <div class="grid field">
+          <div class="field">
+            <label for="host" data-t="server.host"></label>
+            <input id="host" spellcheck="false" autocapitalize="off" placeholder="203.0.113.7">
+            <span class="hint" data-t="server.hostHint"></span>
+          </div>
+          <div class="field">
+            <label for="port" data-t="server.port"></label>
+            <input id="port" type="number" min="1" max="65535" value="22">
+          </div>
+        </div>
+        <div class="field">
+          <label for="username" data-t="server.user"></label>
+          <input id="username" value="root" spellcheck="false" autocapitalize="off">
+        </div>
+        <div class="field">
+          <span class="label" id="auth-label" data-t="server.auth"></span>
+          <div class="seg" role="radiogroup" aria-labelledby="auth-label">
+            <label><input type="radio" name="auth" value="password" checked><span data-t="server.password"></span></label>
+            <label><input type="radio" name="auth" value="key"><span data-t="server.key"></span></label>
+          </div>
+        </div>
+        <div class="field" id="auth-password">
+          <label for="password" data-t="server.password"></label>
+          <input id="password" type="password">
+        </div>
+        <div id="auth-key" hidden>
+          <div class="field">
+            <label for="keyName" data-t="server.keyFile"></label>
+            <div class="row">
+              <select id="keyName"></select>
+              <button type="button" class="btn" id="keyPick" data-t="server.keyOther"></button>
+              <input type="file" id="keyFile" hidden>
+            </div>
+            <span class="hint" id="keyHint"></span>
+          </div>
+          <div class="field">
+            <label for="passphrase" data-t="server.passphrase"></label>
+            <input id="passphrase" type="password">
+          </div>
+        </div>
+        <div class="field" id="sudo-row" hidden>
+          <label for="sudoPassword" data-t="server.sudo"></label>
+          <input id="sudoPassword" type="password">
+          <span class="hint" data-t="server.sudoHint"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">2</span><span data-t="site.title"></span></h2>
+        <label class="choice"><input type="radio" name="mode" value="ip" checked><span><strong data-t="site.ip"></strong><span class="hint" data-t="site.ipHint"></span></span></label>
+        <label class="choice"><input type="radio" name="mode" value="domain"><span><strong data-t="site.domain"></strong><span class="hint" data-t="site.domainHint"></span></span></label>
+        <div class="field indent" id="domain-row" hidden>
+          <label for="domain" data-t="site.domainLabel"></label>
+          <input id="domain" spellcheck="false" autocapitalize="off" data-tp="site.domainPlaceholder">
+        </div>
+        <div class="field">
+          <label for="email" data-t="site.email"></label>
+          <input id="email" type="email" spellcheck="false" autocapitalize="off">
+        </div>
+      </section>
+    </fieldset>
+
+    <div class="actions">
+      <span class="hint" data-t="actions.hint"></span>
+      <button type="button" class="btn big" id="check" data-t="actions.check"></button>
+      <button type="submit" class="btn primary big" id="deploy"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span data-t="actions.deploy"></span></button>
+    </div>
+    <div id="form-error"></div>
+  </form>
+
+  <section class="card" id="progress" hidden aria-live="polite">
+    <div class="progress-head"><span class="spinner" id="spinner"></span><span id="progress-icon"></span><h2 id="progress-title"></h2></div>
+    <ol class="steps" id="steps">
+      <li data-step="connect"><span class="bar"></span><span data-t="steps.connect"></span></li>
+      <li data-step="upload"><span class="bar"></span><span data-t="steps.upload"></span></li>
+      <li data-step="install"><span class="bar"></span><span data-t="steps.install"></span></li>
+      <li data-step="confirm"><span class="bar"></span><span data-t="steps.confirm"></span></li>
+    </ol>
+    <p class="hint" id="progress-hint" data-t="progress.slow"></p>
+    <div id="progress-error"></div>
+    <details id="logbox"><summary data-t="progress.details"></summary><pre class="log" id="log"></pre></details>
+  </section>
+
+  <section class="card result" id="result" hidden aria-live="polite"></section>
+
+  <details class="card tools" id="tools">
+    <summary data-t="tools.title"></summary>
+    <p class="hint" data-t="tools.body"></p>
+    <div class="tool">
+      <p data-t="tools.setupLink"></p>
+      <button type="button" class="btn" id="tool-setup" data-t="tools.setupLinkBtn"></button>
+    </div>
+    <div class="tool">
+      <p data-t="tools.recovery"></p>
+      <label for="recoveryName" data-t="tools.recoveryName"></label>
+      <div class="row">
+        <input id="recoveryName" maxlength="60">
+        <button type="button" class="btn" id="tool-recovery" data-t="tools.recoveryBtn"></button>
+      </div>
+    </div>
+    <div id="tools-error"></div>
+  </details>
+
+  <footer>
+    <p class="hint" data-t="footer.privacy"></p>
+    <p class="hint" id="version"></p>
+    <button type="button" class="btn ghost small" id="quit" data-t="footer.quit"></button>
+  </footer>
+</div>
+
+<div class="screen" id="stopped" hidden><div><h1 data-t="stopped.title"></h1><p data-t="stopped.body"></p></div></div>
+<div class="screen" id="notoken" hidden><div><h1 data-t="notoken.title"></h1><p data-t="notoken.body"></p></div></div>
+
+<dialog id="trust">
+  <h3 data-t="trust.title"></h3>
+  <p id="trust-body"></p>
+  <div class="fp" id="trust-fp"></div>
+  <p class="hint" data-t="trust.compare"></p>
+  <div class="dialog-actions">
+    <button type="button" class="btn" id="trust-cancel" data-t="trust.cancel"></button>
+    <button type="button" class="btn primary" id="trust-ok" data-t="trust.ok"></button>
+  </div>
+</dialog>
+
+<dialog id="changed">
+  <h3 class="warn-ink"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg><span data-t="changed.title"></span></h3>
+  <p id="changed-body"></p>
+  <span class="fp-label" data-t="changed.before"></span>
+  <div class="fp" id="changed-before"></div>
+  <span class="fp-label" data-t="changed.now"></span>
+  <div class="fp" id="changed-now"></div>
+  <div class="dialog-actions">
+    <button type="button" class="btn danger" id="changed-ok" data-t="changed.ok"></button>
+    <button type="button" class="btn primary" id="changed-cancel" data-t="trust.cancel" autofocus></button>
+  </div>
+</dialog>
+
+<script nonce="__NONCE__">
+'use strict';
+
+const T = {
+  en: {
+    title: 'Deploy Codex Console',
+    subtitle: 'Put Codex Console on your own server: fill in the server, press Deploy, then finish setup in your browser. No terminal needed.',
+    'server.title': 'Your server',
+    'server.host': 'Server address',
+    'server.hostHint': 'The IP address or host name from your hosting provider.',
+    'server.port': 'SSH port',
+    'server.user': 'User name',
+    'server.auth': 'Sign in with',
+    'server.password': 'Password',
+    'server.key': 'SSH key',
+    'server.keyFile': 'Key',
+    'server.keyOther': 'Choose file…',
+    'server.keyFromFile': 'File: {name}',
+    'server.keyNone': 'No key found in {dir}: choose your private key file.',
+    'server.keyFound': 'Keys found in {dir}. Or choose another file.',
+    'server.keyPlaceholder': 'Choose a key',
+    'server.passphrase': 'Key passphrase (if it has one)',
+    'server.sudo': 'Sudo password (if needed)',
+    'server.sudoHint': 'Only if this user needs a password for sudo that is not its login password.',
+    'site.title': 'Web address',
+    'site.ip': 'The server’s IP address',
+    'site.ipHint': 'No domain needed: the console gets a real HTTPS certificate for the IP address.',
+    'site.domain': 'My own domain',
+    'site.domainHint': 'Point the domain’s DNS A record at the server first.',
+    'site.domainLabel': 'Domain',
+    'site.domainPlaceholder': 'console.example.com',
+    'site.email': 'Email for certificate notices (optional)',
+    'actions.check': 'Check server',
+    'actions.deploy': 'Deploy',
+    'actions.hint': 'Check only looks at the server. Deploy installs Codex Console, or updates it if it is already there.',
+    'progress.check': 'Checking the server…',
+    'progress.deploy': 'Deploying Codex Console…',
+    'progress.confirm': 'Checking that SSH still works…',
+    'progress.setup-link': 'Getting a new setup link…',
+    'progress.recovery-key': 'Creating a recovery key…',
+    'done.check': 'Check finished',
+    'done.deploy': 'Deploy finished',
+    'done.confirm': 'SSH checked',
+    'done.setup-link': 'New setup link',
+    'done.recovery-key': 'Recovery key created',
+    'failed.title': 'Stopped',
+    'progress.slow': 'Installing takes a few minutes on a small server. Keep this page open.',
+    'steps.connect': 'Connect',
+    'steps.upload': 'Upload',
+    'steps.install': 'Install',
+    'steps.confirm': 'Check SSH',
+    'progress.details': 'Details',
+    'result.ready': 'Codex Console is ready',
+    'result.setupBody': 'Open the setup page to choose your admin password, add your authenticator app and get your first key. The link works once and expires in 7 days.',
+    'result.openSetup': 'Open setup page',
+    'result.copy': 'Copy link',
+    'result.copied': 'Copied',
+    'result.then': 'Then, in the console: Admin → Codex → Sign in with ChatGPT.',
+    'result.updated': 'Setup was finished before, so this was an update: sign in with one of your keys.',
+    'result.openConsole': 'Open Codex Console',
+    'result.address': 'Console address: {url}',
+    'result.sshOk': 'A new SSH login works, so the firewall changes are kept.',
+    'result.sshWarn': 'Could not confirm a new SSH login. If you can still connect, press Check SSH within 10 minutes; otherwise the firewall changes undo themselves.',
+    'result.confirm': 'Check SSH',
+    'result.checkOk': 'The server is ready for Codex Console. Press Deploy when you are.',
+    'result.linkBody': 'Open it to finish setup. It works once and expires in 7 days; older links stop working.',
+    'result.keyBody': 'Shown only once: save it somewhere safe, then sign in with it on the console’s sign-in page.',
+    'result.keyCopy': 'Copy key',
+    'tools.title': 'Other tasks',
+    'tools.body': 'These use the server details above.',
+    'tools.setupLink': 'Lost the setup link, or did it expire?',
+    'tools.setupLinkBtn': 'Get a new setup link',
+    'tools.recovery': 'Lost all your keys? A recovery key lets you sign in again; revoke the old ones in Admin → Keys.',
+    'tools.recoveryName': 'Key name',
+    'tools.recoveryNameDefault': 'Recovery',
+    'tools.recoveryBtn': 'Create recovery key',
+    'trust.title': 'Is this your server?',
+    'trust.body': 'This is the first connection to {host}. Its SSH fingerprint is:',
+    'trust.compare': 'If your hosting provider shows the server’s fingerprint, check that it matches. It is remembered from now on, so another machine pretending to be this server is caught.',
+    'trust.ok': 'Trust and continue',
+    'trust.cancel': 'Cancel',
+    'changed.title': 'The server’s key has changed',
+    'changed.body': '{host} shows a different fingerprint than before. If you did not reinstall the server, someone may be pretending to be it: do not continue.',
+    'changed.before': 'Before',
+    'changed.now': 'Now',
+    'changed.ok': 'I reinstalled it: trust the new key',
+    'footer.privacy': 'Passwords and keys are used only for the current connection and never saved. Only the server address and its fingerprint are remembered.',
+    'footer.version': 'Deploy program {version} · Codex Console {console}',
+    'footer.quit': 'Quit',
+    'stopped.title': 'The deploy program has stopped',
+    'stopped.body': 'You can close this page.',
+    'notoken.title': 'Open the link from the deploy program',
+    'notoken.body': 'This page needs the link shown in the deploy program’s window. If the program is closed, start it again.',
+    'err.invalid': 'Check the highlighted field.',
+    'err.field.host': 'Enter the server’s address.',
+    'err.field.port': 'Enter the SSH port (usually 22).',
+    'err.field.username': 'Enter the user name (often root).',
+    'err.field.password': 'Enter the password.',
+    'err.field.key': 'Choose a private key (not the .pub file).',
+    'err.field.domain': 'Enter a domain such as console.example.com.',
+    'err.field.email': 'Check the email address.',
+    'err.busy': 'Another task is still running.',
+    'err.unauthorized': 'This page has expired: open the link shown in the deploy program’s window.',
+    'err.network': 'Lost contact with the deploy program. Is its window still open?',
+    'err.auth_failed': 'The server did not accept the user name, password or key.',
+    'err.connect_failed': 'Could not reach the server: check the address and the SSH port.',
+    'err.bad_key': 'The key could not be used: wrong passphrase, or not a private key.',
+    'err.no_sudo': 'This user is not root and the server has no sudo.',
+    'err.sudo_password': 'This user needs a password for sudo: enter it under Sudo password.',
+    'err.sudo_failed': 'sudo did not accept the password, or this user may not use sudo.',
+    'err.upload_failed': 'Copying Codex Console to the server failed.',
+    'err.install_failed': 'The install stopped with an error. The details below say why; fix it and press Deploy again.',
+    'err.check_failed': 'The server is not ready yet: the details below say why.',
+    'err.unknown_server': 'Could not find the server’s IPv4 address: enter the IP address itself, or use a domain.',
+    'err.not_installed': 'Codex Console is not on this server yet: press Deploy first.',
+    'err.not_set_up': 'Setup is not finished yet: get a new setup link instead.',
+    'err.already_set_up': 'Setup is already finished: sign in with one of your keys, or create a recovery key.',
+    'err.confirm_failed': 'Still could not confirm a new SSH login.',
+    'err.trust_cancelled': 'Not connected: the server’s fingerprint was not trusted.',
+    'err.bad_answer': 'The server gave an unexpected answer.',
+    'err.stale': 'That fingerprint is out of date: try again.',
+    'err.failed': 'Something went wrong.',
+  },
+  'zh-CN': {
+    title: '部署 Codex 控制台',
+    subtitle: '把 Codex 控制台装到你自己的服务器上：填好服务器信息，点击“部署”，然后在浏览器里完成设置。无需使用终端。',
+    'server.title': '你的服务器',
+    'server.host': '服务器地址',
+    'server.hostHint': '云服务商提供的 IP 地址或主机名。',
+    'server.port': 'SSH 端口',
+    'server.user': '用户名',
+    'server.auth': '登录方式',
+    'server.password': '密码',
+    'server.key': 'SSH 密钥',
+    'server.keyFile': '密钥',
+    'server.keyOther': '选择文件…',
+    'server.keyFromFile': '文件：{name}',
+    'server.keyNone': '在 {dir} 中没有找到密钥：请选择你的私钥文件。',
+    'server.keyFound': '已在 {dir} 中找到密钥。也可以选择其他文件。',
+    'server.keyPlaceholder': '请选择密钥',
+    'server.passphrase': '密钥口令（如果有）',
+    'server.sudo': 'sudo 密码（如需要）',
+    'server.sudoHint': '仅当此用户使用 sudo 需要密码、且与登录密码不同时填写。',
+    'site.title': '访问地址',
+    'site.ip': '服务器的 IP 地址',
+    'site.ipHint': '无需域名：控制台会为该 IP 地址申请正式的 HTTPS 证书。',
+    'site.domain': '我自己的域名',
+    'site.domainHint': '请先把域名的 DNS A 记录指向这台服务器。',
+    'site.domainLabel': '域名',
+    'site.domainPlaceholder': 'console.example.com',
+    'site.email': '接收证书通知的邮箱（可选）',
+    'actions.check': '检查服务器',
+    'actions.deploy': '部署',
+    'actions.hint': '“检查”只查看服务器，不做任何修改。“部署”会安装 Codex 控制台；如果已经安装，则更新它。',
+    'progress.check': '正在检查服务器…',
+    'progress.deploy': '正在部署 Codex 控制台…',
+    'progress.confirm': '正在检查 SSH 是否仍可登录…',
+    'progress.setup-link': '正在获取新的设置链接…',
+    'progress.recovery-key': '正在创建恢复密钥…',
+    'done.check': '检查完成',
+    'done.deploy': '部署完成',
+    'done.confirm': 'SSH 检查完成',
+    'done.setup-link': '新的设置链接',
+    'done.recovery-key': '恢复密钥已创建',
+    'failed.title': '已停止',
+    'progress.slow': '在小型服务器上安装需要几分钟，请保持此页面打开。',
+    'steps.connect': '连接',
+    'steps.upload': '上传',
+    'steps.install': '安装',
+    'steps.confirm': '检查 SSH',
+    'progress.details': '详细信息',
+    'result.ready': 'Codex 控制台已就绪',
+    'result.setupBody': '打开设置页面，设置管理员密码、添加验证器应用并获取你的第一把密钥。链接只能使用一次，7 天后失效。',
+    'result.openSetup': '打开设置页面',
+    'result.copy': '复制链接',
+    'result.copied': '已复制',
+    'result.then': '然后在控制台中：管理后台 → Codex → 用 ChatGPT 登录。',
+    'result.updated': '之前已完成设置，所以这次是更新：用你的一把密钥登录即可。',
+    'result.openConsole': '打开 Codex 控制台',
+    'result.address': '控制台地址：{url}',
+    'result.sshOk': '新的 SSH 登录正常，防火墙的修改已保留。',
+    'result.sshWarn': '无法确认新的 SSH 登录。如果你仍能连接，请在 10 分钟内点击“检查 SSH”；否则防火墙的修改会自动撤销。',
+    'result.confirm': '检查 SSH',
+    'result.checkOk': '服务器已满足 Codex 控制台的安装条件。准备好后点击“部署”。',
+    'result.linkBody': '打开它来完成设置。链接只能使用一次，7 天后失效；旧链接会随之作废。',
+    'result.keyBody': '只显示这一次：请妥善保存，然后在控制台的登录页面用它登录。',
+    'result.keyCopy': '复制密钥',
+    'tools.title': '其他操作',
+    'tools.body': '使用上面填写的服务器信息。',
+    'tools.setupLink': '设置链接丢了，或者已过期？',
+    'tools.setupLinkBtn': '获取新的设置链接',
+    'tools.recovery': '所有密钥都丢了？恢复密钥可以让你重新登录；旧密钥可在 管理后台 → 密钥 中吊销。',
+    'tools.recoveryName': '密钥名称',
+    'tools.recoveryNameDefault': '恢复',
+    'tools.recoveryBtn': '创建恢复密钥',
+    'trust.title': '这是你的服务器吗？',
+    'trust.body': '这是第一次连接 {host}。它的 SSH 指纹是：',
+    'trust.compare': '如果云服务商显示了服务器的指纹，请核对是否一致。从现在起会记住它，冒充这台服务器的其他机器会被发现。',
+    'trust.ok': '信任并继续',
+    'trust.cancel': '取消',
+    'changed.title': '服务器的密钥变了',
+    'changed.body': '{host} 显示的指纹和之前不同。如果你没有重装这台服务器，可能有人在冒充它：请不要继续。',
+    'changed.before': '之前',
+    'changed.now': '现在',
+    'changed.ok': '我重装过它：信任新的密钥',
+    'footer.privacy': '密码和密钥只用于当前连接，从不保存。只会记住服务器地址和它的指纹。',
+    'footer.version': '部署程序 {version} · Codex 控制台 {console}',
+    'footer.quit': '退出',
+    'stopped.title': '部署程序已停止',
+    'stopped.body': '现在可以关闭此页面。',
+    'notoken.title': '请打开部署程序给出的链接',
+    'notoken.body': '此页面需要部署程序窗口中显示的链接。如果程序已关闭，请重新启动它。',
+    'err.invalid': '请检查标出的字段。',
+    'err.field.host': '请输入服务器地址。',
+    'err.field.port': '请输入 SSH 端口（通常是 22）。',
+    'err.field.username': '请输入用户名（通常是 root）。',
+    'err.field.password': '请输入密码。',
+    'err.field.key': '请选择私钥（不是 .pub 文件）。',
+    'err.field.domain': '请输入域名，例如 console.example.com。',
+    'err.field.email': '请检查邮箱地址。',
+    'err.busy': '还有其他任务在运行。',
+    'err.unauthorized': '此页面已失效：请打开部署程序窗口中显示的链接。',
+    'err.network': '与部署程序失去联系。它的窗口还开着吗？',
+    'err.auth_failed': '服务器不接受这个用户名、密码或密钥。',
+    'err.connect_failed': '无法连接服务器：请检查地址和 SSH 端口。',
+    'err.bad_key': '无法使用这把密钥：口令错误，或者它不是私钥。',
+    'err.no_sudo': '此用户不是 root，而且服务器上没有 sudo。',
+    'err.sudo_password': '此用户使用 sudo 需要密码：请在“sudo 密码”中填写。',
+    'err.sudo_failed': 'sudo 不接受这个密码，或者此用户不能使用 sudo。',
+    'err.upload_failed': '把 Codex 控制台复制到服务器时失败。',
+    'err.install_failed': '安装因错误而停止。下面的详细信息说明了原因；解决后请再次点击“部署”。',
+    'err.check_failed': '服务器还没准备好：下面的详细信息说明了原因。',
+    'err.unknown_server': '找不到服务器的 IPv4 地址：请直接填写 IP 地址，或者使用域名。',
+    'err.not_installed': '这台服务器上还没有 Codex 控制台：请先点击“部署”。',
+    'err.not_set_up': '设置还没完成：请改为获取新的设置链接。',
+    'err.already_set_up': '设置已经完成：请用你的一把密钥登录，或者创建恢复密钥。',
+    'err.confirm_failed': '仍然无法确认新的 SSH 登录。',
+    'err.trust_cancelled': '未连接：没有信任该服务器的指纹。',
+    'err.bad_answer': '服务器返回了意外的结果。',
+    'err.stale': '该指纹已过期：请重试。',
+    'err.failed': '出错了。',
+  },
+};
+
+const ICONS = {
+  check: '<path d="M20 6L9 17l-5-5"/>',
+  x: '<path d="M18 6L6 18M6 6l12 12"/>',
+  external: '<path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  warn: '<path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+};
+const STEPS = ['connect', 'upload', 'install', 'confirm'];
+const FIELDS = { host: 'host', port: 'port', username: 'username', password: 'password', key: 'keyName', passphrase: 'passphrase', sudoPassword: 'sudoPassword', domain: 'domain', email: 'email', name: 'recoveryName' };
+
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+let lang = 'en';
+let token = '';
+let info = null;
+let keys = [];
+let sshDir = '~/.ssh';
+let chosenKey = null;
+let running = false;
+let lastAction = null;
+let pendingTrust = null;
+// What the dynamic parts show, so a language switch can draw them again.
+const view = { progress: null, result: null, error: null };
+
+function t(key, vars) {
+  let s = T[lang][key] ?? T.en[key] ?? key;
+  if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(String(vars[k]));
+  return s;
+}
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : String(v));
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+
+function icon(name, cls) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  if (cls) svg.setAttribute('class', cls);
+  svg.innerHTML = ICONS[name];
+  return svg;
+}
+
+const isHttps = (url) => typeof url === 'string' && /^https:\/\/\S+$/.test(url);
+
+async function api(path, body) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? { 'x-deploy-token': token } : { 'x-deploy-token': token, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: 'no-store',
+    });
+  } catch {
+    throw Object.assign(new Error('network'), { code: 'network' });
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || 'failed'), { code: data.error || 'failed', field: data.field });
+  return data;
+}
+
+// ---- the form ----------------------------------------------------------------
+
+const authMode = () => document.querySelector('input[name=auth]:checked').value;
+const siteMode = () => document.querySelector('input[name=mode]:checked').value;
+
+function syncForm() {
+  const key = authMode() === 'key';
+  $('auth-password').hidden = key;
+  $('auth-key').hidden = !key;
+  $('sudo-row').hidden = $('username').value.trim() === 'root' && !$('sudoPassword').value;
+  $('domain-row').hidden = siteMode() !== 'domain';
+}
+
+function renderKeys() {
+  const sel = $('keyName');
+  const was = sel.value;
+  sel.replaceChildren();
+  if (!keys.length && !chosenKey) sel.append(h('option', { value: '' }, t('server.keyPlaceholder')));
+  for (const k of keys) sel.append(h('option', { value: k }, sshDir + '/' + k));
+  if (chosenKey) sel.append(h('option', { value: '__file__' }, t('server.keyFromFile', { name: chosenKey.name })));
+  if ([...sel.options].some((o) => o.value === was)) sel.value = was;
+  $('keyHint').textContent = keys.length ? t('server.keyFound', { dir: sshDir }) : t('server.keyNone', { dir: sshDir });
+}
+
+function connection() {
+  const c = { host: $('host').value.trim(), port: Number($('port').value || 22), username: $('username').value.trim(), auth: authMode() };
+  if (c.auth === 'password') c.password = $('password').value;
+  else {
+    const v = $('keyName').value;
+    if (v === '__file__' && chosenKey) c.privateKey = chosenKey.text;
+    else if (v) c.keyName = v;
+    c.passphrase = $('passphrase').value;
+  }
+  if ($('sudoPassword').value) c.sudoPassword = $('sudoPassword').value;
+  return c;
+}
+
+function site() {
+  return { mode: siteMode(), domain: $('domain').value.trim(), email: $('email').value.trim(), lang };
+}
+
+/** The first field that is plainly missing, before asking the deploy program. */
+function missing(body) {
+  const c = body.connection;
+  if (!c.host) return 'host';
+  if (!Number.isInteger(c.port) || c.port < 1 || c.port > 65535) return 'port';
+  if (!c.username) return 'username';
+  if (c.auth === 'password' && !c.password) return 'password';
+  if (c.auth === 'key' && !c.keyName && !(c.privateKey && c.privateKey.includes('PRIVATE KEY'))) return 'key';
+  if (body.site && body.site.mode === 'domain' && !body.site.domain) return 'domain';
+  return null;
+}
+
+function markInvalid(field) {
+  const el = FIELDS[field] && $(FIELDS[field]);
+  if (!el) return;
+  if (field === 'sudoPassword') $('sudo-row').hidden = false;
+  el.classList.add('invalid');
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.focus({ preventScroll: true });
+}
+
+function clearInvalid() {
+  for (const el of document.querySelectorAll('.invalid')) el.classList.remove('invalid');
+}
+
+// ---- tasks -------------------------------------------------------------------
+
+function errorText(e) {
+  if (e.code === 'invalid' && e.field && T.en['err.field.' + e.field]) return t('err.field.' + e.field);
+  return T.en['err.' + e.code] ? t('err.' + e.code) : t('err.failed');
+}
+
+function alertBox(kind, text, ...extra) {
+  return h('div', { class: 'alert ' + kind, role: kind === 'danger' ? 'alert' : null }, icon(kind === 'good' ? 'check' : kind === 'danger' ? 'warn' : 'info'), h('div', {}, text, ...extra));
+}
+
+function renderError() {
+  $('form-error').replaceChildren();
+  $('tools-error').replaceChildren();
+  const e = view.error;
+  if (!e) return;
+  $(e.where === 'tools' ? 'tools-error' : 'form-error').append(alertBox('danger', errorText(e.error)));
+}
+
+function showError(error, where) {
+  view.error = { error, where };
+  renderError();
+  if (error.field) markInvalid(error.field);
+  else if (error.code === 'sudo_password') markInvalid('sudoPassword');
+}
+
+function setBusy(busy) {
+  running = busy;
+  $('fields').disabled = busy;
+  for (const id of ['check', 'deploy', 'tool-setup', 'tool-recovery', 'quit', 'recoveryName']) $(id).disabled = busy;
+  for (const b of document.querySelectorAll('#result button')) b.disabled = busy;
+}
+
+async function start(kind, extra) {
+  if (running) return;
+  const where = kind === 'setup-link' || kind === 'recovery-key' ? 'tools' : 'form';
+  clearInvalid();
+  view.error = null;
+  renderError();
+  const body = { connection: connection(), ...(extra || {}) };
+  if (kind === 'check' || kind === 'deploy') body.site = site();
+  const field = missing(body);
+  if (field) return showError({ code: 'invalid', field }, where);
+  let job;
+  try {
+    ({ job } = await api('/api/' + kind, body));
+  } catch (e) {
+    return showError(e, where);
+  }
+  lastAction = { kind, extra };
+  await follow(job, kind);
+}
+
+async function follow(id, kind) {
+  setBusy(true);
+  view.result = null;
+  view.progress = { kind, step: null, done: false, error: null, result: null };
+  $('log').textContent = '';
+  $('logbox').open = false;
+  renderResult();
+  renderProgress();
+  $('progress').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  let since = 0;
+  let misses = 0;
+  for (;;) {
+    let j;
+    try {
+      j = await api('/api/jobs/' + id + '?since=' + since);
+      misses = 0;
+    } catch (e) {
+      if (e.code === 'network' && ++misses < 8) {
+        await sleep(1000);
+        continue;
+      }
+      Object.assign(view.progress, { done: true, error: { code: e.code } });
+      break;
+    }
+    appendLog(j.lines);
+    since = j.next;
+    view.progress.step = j.step;
+    if (j.done) {
+      Object.assign(view.progress, { done: true, error: j.error, result: j.result });
+      break;
+    }
+    renderProgress();
+    await sleep(700);
+  }
+  setBusy(false);
+  renderProgress();
+  const err = view.progress.error;
+  if (err && (err.code === 'unknown_host' || err.code === 'host_key_changed')) return askTrust(err);
+  if (err) {
+    if (err.code === 'sudo_password') markInvalid('sudoPassword');
+    if (err.code === 'install_failed' || err.code === 'check_failed') $('logbox').open = true;
+  }
+  if (!err || err.code === 'install_failed') {
+    view.result = err ? null : { kind, data: view.progress.result };
+    renderResult();
+    if (view.result) $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function appendLog(lines) {
+  if (!lines.length) return;
+  const log = $('log');
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+  log.append(document.createTextNode(lines.join('\n') + '\n'));
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+
+function renderProgress() {
+  const p = view.progress;
+  // While the owner decides whether to trust the server, nothing has failed yet.
+  $('progress').hidden = !p || Boolean(p.error && (p.error.code === 'unknown_host' || p.error.code === 'host_key_changed'));
+  if (!p) return;
+  const failed = p.done && p.error;
+  $('spinner').hidden = p.done;
+  $('progress-icon').replaceChildren(p.done ? icon(failed ? 'x' : 'check', failed ? 'bad' : 'ok') : '');
+  $('progress-title').textContent = !p.done ? t('progress.' + p.kind) : failed ? t('failed.title') : t('done.' + p.kind);
+  $('steps').hidden = p.kind !== 'deploy';
+  $('progress-hint').hidden = p.kind !== 'deploy' || p.done;
+  const at = STEPS.indexOf(failed && p.error.code === 'install_failed' ? 'install' : p.step);
+  for (const li of $('steps').children) {
+    const i = STEPS.indexOf(li.dataset.step);
+    li.className = p.done && !failed ? 'done' : i < at ? 'done' : i === at ? (failed ? 'failed' : 'active') : '';
+  }
+  const box = $('progress-error');
+  box.replaceChildren();
+  if (failed && p.error.code !== 'unknown_host' && p.error.code !== 'host_key_changed') {
+    box.append(alertBox('danger', errorText(p.error), p.error.detail ? h('span', { class: 'detail' }, p.error.detail) : null));
+  }
+}
+
+function copyButton(text, label) {
+  const span = h('span', {}, label);
+  return h('button', {
+    type: 'button',
+    class: 'btn',
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = h('textarea', {}, text);
+        document.body.append(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      span.textContent = t('result.copied');
+      setTimeout(() => (span.textContent = label), 1500);
+    },
+  }, icon('copy'), span);
+}
+
+function linkRow(url, label, primary) {
+  return [
+    h('div', { class: 'linkrow' },
+      h('a', { class: primary ? 'btn primary' : 'btn', href: url, target: '_blank', rel: 'noopener noreferrer' }, icon('external'), h('span', {}, label)),
+      copyButton(url, t('result.copy'))),
+    h('div', { class: 'mono' }, url),
+  ];
+}
+
+function head(name, title) {
+  return h('div', { class: 'result-head' }, h('span', { class: 'badge' }, icon(name)), h('h2', {}, title));
+}
+
+function renderResult() {
+  const box = $('result');
+  const r = view.result;
+  box.replaceChildren();
+  box.hidden = !r;
+  if (!r) return;
+  const d = r.data || {};
+  if (r.kind === 'deploy') {
+    box.append(head('check', t('result.ready')));
+    if (isHttps(d.setupUrl)) {
+      box.append(h('p', {}, t('result.setupBody')), ...linkRow(d.setupUrl, t('result.openSetup'), true), h('p', { class: 'hint' }, t('result.then')));
+      if (isHttps(d.consoleUrl)) box.append(h('p', { class: 'hint' }, t('result.address', { url: d.consoleUrl })));
+    } else {
+      box.append(h('p', {}, t('result.updated')));
+      if (isHttps(d.consoleUrl)) box.append(...linkRow(d.consoleUrl, t('result.openConsole'), true));
+    }
+    box.append(d.sshConfirmed
+      ? alertBox('good', t('result.sshOk'))
+      : alertBox('warn', t('result.sshWarn'), h('div', {}, h('button', { type: 'button', class: 'btn small', onclick: () => start('confirm') }, t('result.confirm')))));
+  } else if (r.kind === 'check') {
+    box.append(head('check', t('done.check')), h('p', {}, t('result.checkOk')));
+  } else if (r.kind === 'confirm') {
+    box.append(head('check', t('done.confirm')), h('p', {}, t('result.sshOk')));
+  } else if (r.kind === 'setup-link' && isHttps(d.setupUrl)) {
+    box.append(head('link', t('done.setup-link')), h('p', {}, t('result.linkBody')), ...linkRow(d.setupUrl, t('result.openSetup'), true));
+  } else if (r.kind === 'recovery-key' && d.key) {
+    box.append(head('key', t('done.recovery-key')), h('div', { class: 'secret' }, d.key), h('div', { class: 'linkrow' }, copyButton(d.key, t('result.keyCopy'))), h('p', { class: 'hint' }, t('result.keyBody')));
+    if (isHttps(d.consoleUrl)) box.append(...linkRow(d.consoleUrl, t('result.openConsole')));
+  }
+}
+
+// ---- trusting a server's key ---------------------------------------------------
+
+function renderTrust() {
+  const e = pendingTrust;
+  if (!e) return;
+  if (e.code === 'host_key_changed') {
+    $('changed-body').textContent = t('changed.body', { host: e.hostPort });
+    $('changed-before').textContent = e.previous || '?';
+    $('changed-now').textContent = e.fingerprint;
+  } else {
+    $('trust-body').textContent = t('trust.body', { host: e.hostPort });
+    $('trust-fp').textContent = e.fingerprint;
+  }
+}
+
+function askTrust(err) {
+  pendingTrust = err;
+  renderTrust();
+  const dialog = $(err.code === 'host_key_changed' ? 'changed' : 'trust');
+  dialog.returnValue = '';
+  dialog.showModal();
+}
+
+async function trust(dialog) {
+  const e = pendingTrust;
+  dialog.close('ok');
+  pendingTrust = null;
+  try {
+    await api('/api/trust', { hostPort: e.hostPort, fingerprint: e.fingerprint });
+  } catch (err) {
+    Object.assign(view.progress, { error: { code: err.code } });
+    return renderProgress();
+  }
+  view.progress = null;
+  renderProgress();
+  if (lastAction) start(lastAction.kind, lastAction.extra);
+}
+
+function untrusted() {
+  if (!pendingTrust) return;
+  pendingTrust = null;
+  if (view.progress) view.progress.error = { code: 'trust_cancelled' };
+  renderProgress();
+}
+
+// ---- language and start-up ---------------------------------------------------
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.title = t('title');
+  for (const el of document.querySelectorAll('[data-t]')) el.textContent = t(el.dataset.t);
+  for (const el of document.querySelectorAll('[data-tp]')) el.placeholder = t(el.dataset.tp);
+  for (const b of document.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+  const rn = $('recoveryName');
+  if (!rn.value || rn.value === T.en['tools.recoveryNameDefault'] || rn.value === T['zh-CN']['tools.recoveryNameDefault']) rn.value = t('tools.recoveryNameDefault');
+  if (info) $('version').textContent = t('footer.version', { version: info.version, console: info.consoleVersion + (info.consoleCommit ? ' (' + info.consoleCommit + ')' : '') });
+  renderKeys();
+  renderError();
+  renderProgress();
+  renderResult();
+  renderTrust();
+}
+
+function fill(saved) {
+  if (!saved) return;
+  $('host').value = saved.host || '';
+  $('port').value = String(saved.port || 22);
+  $('username').value = saved.username || 'root';
+  document.querySelector('input[name=auth][value=' + (saved.auth === 'key' ? 'key' : 'password') + ']').checked = true;
+  if (saved.keyName && keys.includes(saved.keyName)) $('keyName').value = saved.keyName;
+  document.querySelector('input[name=mode][value=' + (saved.mode === 'domain' ? 'domain' : 'ip') + ']').checked = true;
+  $('domain').value = saved.domain || '';
+  $('email').value = saved.email || '';
+}
+
+function wire() {
+  $('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    start('deploy');
+  });
+  $('check').addEventListener('click', () => start('check'));
+  $('tool-setup').addEventListener('click', () => start('setup-link'));
+  $('tool-recovery').addEventListener('click', () => start('recovery-key', { name: $('recoveryName').value.trim(), lang }));
+  for (const el of document.querySelectorAll('input[name=auth], input[name=mode]')) el.addEventListener('change', syncForm);
+  $('username').addEventListener('input', syncForm);
+  document.addEventListener('input', (e) => e.target.classList && e.target.classList.remove('invalid'));
+  $('keyPick').addEventListener('click', () => $('keyFile').click());
+  $('keyFile').addEventListener('change', async () => {
+    const file = $('keyFile').files[0];
+    $('keyFile').value = '';
+    if (!file) return;
+    const text = file.size <= 64 * 1024 ? await file.text() : '';
+    if (!text.includes('PRIVATE KEY')) return showError({ code: 'invalid', field: 'key' }, 'form');
+    chosenKey = { name: file.name, text };
+    renderKeys();
+    $('keyName').value = '__file__';
+    $('keyName').classList.remove('invalid');
+  });
+  for (const b of document.querySelectorAll('[data-lang]')) {
+    b.addEventListener('click', () => {
+      lang = b.dataset.lang;
+      applyLang();
+      api('/api/lang', { lang }).catch(() => undefined);
+    });
+  }
+  $('trust-ok').addEventListener('click', () => trust($('trust')));
+  $('changed-ok').addEventListener('click', () => trust($('changed')));
+  $('trust-cancel').addEventListener('click', () => $('trust').close());
+  $('changed-cancel').addEventListener('click', () => $('changed').close());
+  // Closing a dialog any other way (Esc, Cancel) means "do not trust".
+  for (const id of ['trust', 'changed']) $(id).addEventListener('close', (e) => e.target.returnValue !== 'ok' && untrusted());
+  $('quit').addEventListener('click', async () => {
+    await api('/api/quit', {}).catch(() => undefined);
+    $('app').hidden = true;
+    $('stopped').hidden = false;
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (running) e.preventDefault();
+  });
+}
+
+async function main() {
+  const params = new URLSearchParams(location.search);
+  try {
+    token = params.get('t') || sessionStorage.getItem('deploy-token') || '';
+    if (params.get('t')) sessionStorage.setItem('deploy-token', token);
+  } catch {
+    token = params.get('t') || '';
+  }
+  if (params.has('t')) history.replaceState(null, '', '/');
+  lang = (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+  let state;
+  try {
+    if (!token) throw new Error('no token');
+    state = await api('/api/state');
+  } catch {
+    applyLang();
+    $('notoken').hidden = false;
+    return;
+  }
+  info = state;
+  keys = state.keys || [];
+  sshDir = state.sshDir || '~/.ssh';
+  if (state.lang) lang = state.lang;
+  wire();
+  applyLang();
+  fill(state.server);
+  syncForm();
+  $('app').hidden = false;
+  // Back on the page while a task runs (a reload, say): keep following it.
+  if (state.job && !state.job.done) follow(state.job.id, state.job.kind);
+}
+
+main();
+</script>
+</body>
+</html>

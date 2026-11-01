@@ -1,3 +1,4 @@
+import { setupUrl } from './auth/setupLink.js';
 import { ConfigError, loadConfig, loadDotEnv } from './config.js';
 import type { BridgeLogger } from './codex/bridge.js';
 import { buildApp } from './http/app.js';
@@ -55,7 +56,11 @@ async function main(): Promise<void> {
     },
     'Codex Console listening',
   );
-  if (!runtime.owner.exists()) app.log.warn('No owner account yet: run `npm run setup` to create it.');
+  if (!runtime.owner.exists()) {
+    // Finish setup in the browser; the installer prints its own link, so keep a valid one.
+    const link = runtime.setupLinks.hasValid() ? null : setupUrl(config.publicOrigin, runtime.setupLinks.create());
+    app.log.warn(link ? `No owner account yet. Finish setup in your browser: ${link}` : 'No owner account yet: open the setup link the installer printed (or run `npm run setup -- --setup-link`).');
+  }
 
   let closing = false;
   const shutdown = async (signal: string) => {

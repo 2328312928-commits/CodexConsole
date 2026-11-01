@@ -71,9 +71,11 @@ Hitting a limit is recorded in the security log; repeated identical events are c
 - **Client addresses** come from Caddy's `X-Forwarded-For` (trusted from loopback only) or a PROXY protocol header (Funnel); they drive IP allowlists, throttling and logs.
 - **Dangerous scopes.** `shell` (runs `!command` outside the model and its sandbox) and `mcp:manage` (adds commands that Codex will start) are effectively code execution on the server. They are off by default, highlighted in the UI, and every use is in the security log.
 
-## A server set up with `deploy/deploy.sh`
+## A deployed server (the deploy program or `deploy/deploy.sh`)
 
-- **Nothing secret is uploaded.** Only files git tracks are copied; `.env`, data folders, databases and key files are excluded by `.gitignore`. Secrets (the pepper, password hash, TOTP secret, first key) are created on the server; the first key is printed once in your terminal.
+- **Nothing secret is uploaded.** Only the console's files are copied (what git tracks; `.env`, data folders, databases and key files are excluded by `.gitignore`). Secrets (the pepper, password hash, TOTP secret, keys) are created on the server.
+- **First setup.** Until the owner account exists, the console accepts a one-time setup link instead of a key: 256 random bits, stored only as an HMAC, valid for 7 days, replaced by any newer link and spent when setup finishes. The token sits in the link's `#fragment`, so it never reaches a server or proxy log. Wrong links count against the address (10 per 15 minutes, then it is locked). Once setup is done, setup links are refused.
+- **The deploy program** serves its page on `127.0.0.1` only, to requests that carry the random token from the link it opened, with Host, Origin and content-type checks and a strict CSP. It asks you to confirm each server's SSH host key the first time and stops if that key changes, unless you confirm a reinstall. Passwords and private keys stay in memory for one task; it saves only server addresses, your options and the trusted fingerprints.
 - **Network.** The console (`127.0.0.1:8787`) and the API (`127.0.0.1:8788`) listen on loopback only, behind Caddy with automatic HTTPS. The firewall allows only SSH, 80 and 443.
 - **Service.** A dedicated system user (`codexconsole`) runs the console. The code is owned by root, so the service cannot change it. systemd makes everything outside `/var/lib/codex-console` read-only and blocks privilege escalation.
 - **Codex as its own user.** Codex runs in a second service (`codex-console-codex`) as its own user (`codexagent`). It may write only to the workspace and its own folders; the console's data folder is private to the console's user, and Codex's service cannot even see it. The console reaches Codex through a small relay on a socket only their shared group may use (`/run/codex-console/codex.sock`); the relay runs nothing but the app-server, `codex doctor` and MCP sign-out. Options that cover `/proc` or `/sys` are left out because Codex mounts its own `/proc` for its sandbox.
@@ -120,7 +122,7 @@ On a deployed server use `sudo codex-console setup …`; on your own machine `np
 | --- | --- |
 | A device is lost or stolen | Revoke its key: **Admin → Keys → Revoke**, or `--revoke-key ID` (`--list-keys` shows the ids). It is signed out at once. |
 | A key may have leaked | Revoke it (or **Rotate** with no grace period), then check its usage and the security log filtered by that key. |
-| You lost every key | `--new-key "Laptop"` on the server. |
+| You lost every key | `--new-key "Laptop"` on the server, or **Other tasks → Create recovery key** in the deploy program. |
 | Your password may be known | `--reset-password` (ends all sign-ins) |
 | Your authenticator is lost | `--reset-totp` (ends all sign-ins) |
 | Something looks odd | **Admin → Security log**: failed sign-ins, lockouts, rejected hosts, origins and keys. **Admin → Keys** shows every browser signed in now; sign out any you don't recognise, or use `--sign-out-all`. |
@@ -130,7 +132,7 @@ On a deployed server use `sudo codex-console setup …`; on your own machine `np
 
 Codex's sandbox limits writes and network access, not reads, so what Codex can reach depends on the system user it runs as.
 
-- **On a server set up with `deploy/deploy.sh`** Codex runs as its own user and cannot read or change the console's data folder (the database, the pepper, keys, the encrypted authenticator secret). A key holder cannot turn Codex against the console: the admin area still needs your password and an authenticator code. A key with full access still has Codex's own reach: the workspace, Codex's ChatGPT sign-in and the network.
+- **On a deployed server** Codex runs as its own user and cannot read or change the console's data folder (the database, the pepper, keys, the encrypted authenticator secret). A key holder cannot turn Codex against the console: the admin area still needs your password and an authenticator code. A key with full access still has Codex's own reach: the workspace, Codex's ChatGPT sign-in and the network.
 - **On your own machine** (`npm start`) Codex runs as your user, next to the console's data. Any key that can send prompts can have Codex read that data, so the admin area is protected by your password alone; a key with full access can also change it, which makes it equivalent to the owner. Give full access only to keys on devices you control.
 
 ## Things this does not protect against

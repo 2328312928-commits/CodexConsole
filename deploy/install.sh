@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Codex Console server installer: installs or updates the console on this server.
-# deploy/deploy.sh copies the app here and runs this as root over SSH. Re-running it is
-# safe: the database, workspace, Codex sign-in and secrets stay where they are.
+# The deploy program (deployer/) or deploy/deploy.sh copies the app here and runs this as root
+# over SSH. Re-running it is safe: the database, workspace, Codex sign-in and secrets stay where they are.
 #
 #   install.sh --src DIR (--domain NAME | --ip ADDRESS) [options]
 #   install.sh --check   (--domain NAME | --ip ADDRESS)     look only, change nothing
@@ -376,16 +376,11 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 
-# ---- owner account and keys ---------------------------------------------
+# ---- keys -------------------------------------------------------------------
+# The owner account (admin password, authenticator, first key) is set up in the browser,
+# from the one-time link printed at the end, once the address is final. Nothing to type here.
 
-if ! /usr/local/bin/codex-console setup --is-set-up; then
-  step 'Admin password, authenticator and your first API key' '管理员密码、验证器和你的第一把 API 密钥'
-  if [ -t 0 ] && [ -t 1 ]; then
-    /usr/local/bin/codex-console setup ${UI_LANG:+--lang "$UI_LANG"} || warn "Setup did not finish: run 'sudo codex-console setup' later." "设置未完成：稍后请运行 'sudo codex-console setup'。"
-  else
-    warn "No terminal here: run 'sudo codex-console setup' on the server to finish." "当前没有终端：请在服务器上运行 'sudo codex-console setup' 完成设置。"
-  fi
-elif [ -n "$NEW_KEY" ]; then
+if [ -n "$NEW_KEY" ] && /usr/local/bin/codex-console setup --is-set-up; then
   /usr/local/bin/codex-console setup --new-key "$NEW_KEY" ${UI_LANG:+--lang "$UI_LANG"}
 fi
 
@@ -629,14 +624,24 @@ if [ "$HARDEN_SSH" = 1 ]; then
 fi
 
 case "$SRC" in /tmp/codex-console-upload-*) rm -rf "$SRC" ;; esac
+# A one-time link that finishes setup in the browser, until the owner account exists.
+SETUP_URL=''
+/usr/local/bin/codex-console setup --is-set-up || SETUP_URL=$(/usr/local/bin/codex-console setup --setup-link)
 trap - ERR
 
 printf '\n%s%s%s\n' "$B" "$(t 'Codex Console is ready' 'Codex Console 已就绪')" "$N"
 printf '  %s  %shttps://%s%s\n' "$(t 'Open:' '打开：')" "$G" "$SITE" "$N"
-info '1. Sign in with your API key (printed above on the first install).' '1. 用你的 API 密钥登录（首次安装时已在上方输出）。'
+if [ -n "$SETUP_URL" ]; then
+  info '1. Finish setup in your browser: admin password, authenticator and your first key. Link (works once):' '1. 在浏览器中完成设置：管理员密码、验证器和你的第一把密钥。链接（只能用一次）：'
+  printf '     %s%s%s\n' "$G" "$SETUP_URL" "$N"
+else
+  info '1. Sign in with one of your keys.' '1. 用你的一把密钥登录。'
+fi
 info '2. Admin (password + authenticator code) → Codex → sign in with ChatGPT.' '2. 管理后台（密码 + 验证器动态码）→ Codex → 用 ChatGPT 登录。'
-info "Another device: sudo codex-console setup --new-key \"Phone\"" "其他设备：sudo codex-console setup --new-key \"手机\""
-info 'Update: run deploy.sh again with the same options.   Logs: sudo codex-console logs' '更新：用相同参数再次运行 deploy.sh。   日志：sudo codex-console logs'
+info 'More devices: Admin → Keys → New key.   Logs: sudo codex-console logs' '更多设备：管理后台 → 密钥 → 新建密钥。   日志：sudo codex-console logs'
+# For the deploy program, which reads these from the output.
+printf 'CODEX_CONSOLE_URL=https://%s\n' "$SITE"
+[ -z "$SETUP_URL" ] || printf 'CODEX_CONSOLE_SETUP_URL=%s\n' "$SETUP_URL"
 if [ "$GUARDED" = 1 ]; then
   warn "Safety timer: the firewall and SSH changes undo themselves in $GUARD_MINUTES minutes unless a new SSH login confirms them (deploy.sh does this; by hand: sudo codex-console confirm)." "安全计时器：除非有新的 SSH 登录确认（deploy.sh 会自动完成；手动：sudo codex-console confirm），防火墙和 SSH 的修改会在 $GUARD_MINUTES 分钟后自动撤销。"
 fi

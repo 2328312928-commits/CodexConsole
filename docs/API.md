@@ -5,7 +5,7 @@
 The public API lets **your own** scripts, tools and devices use the console without a browser: send prompts, wait for or stream the result, manage sessions, move files, answer approvals and manage MCP servers. It is meant for one owner. Don't hand keys to other people: sharing access to your ChatGPT plan is against OpenAI's terms.
 
 - It runs on a **separate listener** (default `127.0.0.1:8788`) that serves only `/v1`. The console UI, `/api` and the admin area are never reachable through it.
-- On a server set up with [`deploy/deploy.sh`](DEPLOY.md) it is on, at `https://<your address>/v1`. On your own machine it is **off** until you set `CC_API_ENABLED=true`; to reach it from the internet, put it behind a TLS tunnel: see [FUNNEL.md](FUNNEL.md).
+- On a [deployed server](DEPLOY.md) it is on, at `https://<your address>/v1`. On your own machine it is **off** until you set `CC_API_ENABLED=true`; to reach it from the internet, put it behind a TLS tunnel: see [FUNNEL.md](FUNNEL.md).
 - Every call needs an **API key** with API scopes, created in **Admin → Keys**. Console cookies are ignored.
 
 ## Contents

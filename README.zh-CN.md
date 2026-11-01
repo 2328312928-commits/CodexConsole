@@ -42,27 +42,17 @@
 
 ## 部署到你的服务器（主要方式）
 
-你需要一台能用 SSH 登录的 Linux 服务器（Ubuntu 22.04/24.04 或 Debian 12/13，x86-64 或 ARM64，内存 1 GB 以上），以及一个指向它的域名，或者只用它的公网 IPv4 地址。云服务商的防火墙需要开放 80 和 443 端口。在你自己的电脑上、在本仓库中运行：
+你需要一台能用 SSH 登录的 Linux 服务器（Ubuntu 22.04/24.04 或 Debian 12/13，x86-64 或 ARM64，内存 1 GB 以上），以及一个指向它的域名，或者只用它的公网 IPv4 地址。云服务商的防火墙需要开放 80 和 443 端口。无需使用终端：
 
-```bash
-./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7
-```
+1. 在你的电脑上**运行部署程序**（Windows、macOS 或 Linux：[在哪里获取](docs/DEPLOY.zh-CN.md#部署程序)）。它会在浏览器中打开一个页面。
+2. **填写你的服务器**（地址、用户名、密码或 SSH 密钥），选择**服务器的 IP 地址**或**你的域名**，然后点击**部署**。第一次连接时，请确认服务器的指纹。安装需要几分钟。
+3. **打开它给出的设置页面**：设置管理员密码，用验证器应用扫描二维码，并保存你的第一把密钥。这个浏览器随即就登录好了。
+4. **管理后台 → Codex → 用 ChatGPT 登录。**
+5. **更多设备：****管理后台 → 密钥 → 新建密钥**：输入名称，需要的话再填一个 token 额度，然后点击**创建密钥**。在同一页点击**吊销**，会让这把密钥在所有地方立即退出登录。
 
-或者使用域名：
+再次点击**部署**即可更新；你的数据保留在服务器上。部署程序自带控制台本身的文件（绝不包括 `.env`、数据或密钥），在服务器上构建，安装 Node.js 和 Caddy，申请 HTTPS 证书，并配置一个受限的系统服务、防火墙、fail2ban 和自动安全更新。
 
-```bash
-./deploy/deploy.sh me@my-server --domain console.example.com --email me@example.com
-```
-
-脚本会通过 SSH 复制应用（只复制 git 跟踪的文件：绝不包括 `.env`、数据或密钥），在服务器上构建，安装 Node.js 和 Caddy，申请 HTTPS 证书，并配置一个受限的系统服务、防火墙、fail2ban 和自动安全更新。首次安装时，它会在这个终端里让你设置管理员密码和验证器，然后输出**你的第一把 API 密钥**。
-
-然后：
-
-1. 打开它显示的地址，粘贴密钥。浏览器只需要这一步。
-2. 进入 **管理后台**（密码 + 验证器动态码）→ **Codex** → 用你的 ChatGPT 套餐登录。
-3. 为其他每台设备各签发一把密钥：**管理后台 → 密钥 → 新建密钥**，或在服务器上运行 `sudo codex-console setup --new-key "手机"`。
-
-用同一条命令再次运行即可更新；你的数据保留在服务器上。部署的全部细节（选项、它会修改什么、更新、备份、故障排查）：**[docs/DEPLOY.zh-CN.md](docs/DEPLOY.zh-CN.md)**。
+如果你习惯用终端，在本仓库中运行 `./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7` 效果相同，并会在最后输出设置链接。部署的全部细节（两种方式、它会修改什么、更新、备份、故障排查）：**[docs/DEPLOY.zh-CN.md](docs/DEPLOY.zh-CN.md)**。
 
 ## 在自己的电脑上运行
 
@@ -73,7 +63,7 @@ npm run setup              # 管理员密码 + 验证器 + 你的第一把 API �
 npm start
 ```
 
-打开 `http://127.0.0.1:8787`，粘贴密钥，然后在 **管理后台 → Codex** 中登录 Codex。`npm run setup -- --lang zh-CN` 以中文运行设置。
+打开 `http://127.0.0.1:8787`，粘贴密钥，然后在 **管理后台 → Codex** 中登录 Codex。`npm run setup -- --lang zh-CN` 以中文运行设置。也可以跳过 `npm run setup`：这时 `npm start` 会输出一个一次性的设置链接，在浏览器中完成同样的设置。
 
 从使用设备配对的旧版本升级？配对已经取消；你的所有者账户和 API 密钥都会保留（已有的密钥仍只用于 API）。运行一次 `npm run setup -- --new-key "笔记本"`，即可得到一把能登录控制台的密钥。
 
@@ -138,7 +128,7 @@ MCP 工具调用会连同参数、进度和结果显示在对话记录中。
 
 ## 恢复命令
 
-在部署好的服务器上使用 `sudo codex-console setup …`；在自己的电脑上使用 `npm run setup -- …`。
+在部署好的服务器上使用 `sudo codex-console setup …`（不用终端的话，部署程序的**其他操作**可以创建恢复密钥或获取新的设置链接）；在自己的电脑上使用 `npm run setup -- …`。
 
 | 选项 | 作用 |
 | --- | --- |
@@ -148,6 +138,7 @@ MCP 工具调用会连同参数、进度和结果显示在对话记录中。
 | `--sign-out-all` | 结束所有控制台登录 |
 | `--reset-password` | 设置新的管理员密码；结束所有登录 |
 | `--reset-totp` | 绑定新的验证器；结束所有登录 |
+| `--setup-link` | 输出一个新的一次性设置链接（只在设置完成之前有效） |
 
 ## 开发
 
@@ -156,6 +147,7 @@ npm run dev -- --fake-codex   # 界面 + 服务器，使用模拟的 Codex：无
 npm run dev                   # 同上，使用你真实的 Codex
 npm test                      # 单元测试 + 集成测试（使用模拟的 Codex）
 npm run typecheck
+cd deployer && npm test       # 部署程序的测试（针对模拟的 SSH 服务器）
 ```
 
 `test/fake-codex/` 中的模拟 app-server 实现了与 Codex 0.164.0 相同的协议结构。提示词中的关键字会触发对应功能：`approve`、`permission`、`question`、`elicit`、`mcp`、`image`、`video`、`edit`、`slow`、`steady`、`fail`、`fail limit`。
@@ -166,6 +158,7 @@ npm run typecheck
 | `web/` | React 界面（Vite） |
 | `shared/` | 类型、协议子集（`shared/codex.ts`）以及 EN / 中文词典（`shared/i18n/`） |
 | `deploy/` | `deploy.sh`（在你的电脑上运行）、`install.sh`（在服务器上运行）、示例 |
+| `deployer/` | 部署程序：在你电脑上打开一个页面，通过 SSH 完成部署。`npm run package` 生成可执行文件 |
 | `test/` | Vitest 测试和模拟的 Codex |
 
 新增界面文字时，需要同时在 `shared/i18n/en.ts` 和 `shared/i18n/zh-CN.ts` 中添加键，否则 TypeScript 和 i18n 测试会失败。

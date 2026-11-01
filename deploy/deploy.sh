@@ -119,13 +119,15 @@ UPLOAD=$(remote_tmp -d codex-console-upload)
 export COPYFILE_DISABLE=1 # no macOS ._ files in the archive
 list_files() {
   if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # Tracked and new files, minus everything .gitignore excludes (.env, data, node_modules, keys).
+    # Tracked and new files, minus everything .gitignore excludes (.env, data, node_modules, keys),
+    # minus the deploy program (it runs on your computer, not the server).
     local f
     while IFS= read -r -d '' f; do
+      case "$f" in deployer/* | .github/*) continue ;; esac
       if [ -e "$ROOT/$f" ]; then printf '%s\0' "$f"; fi
     done < <(git -C "$ROOT" ls-files -z -co --exclude-standard)
   else
-    (cd "$ROOT" && find . -type f ! -path './node_modules/*' ! -path './dist/*' ! -path './.git/*' ! -path './data/*' ! -name '.env*' ! -name '*.db*' ! -name '*.pem' ! -name '*.key' -print0)
+    (cd "$ROOT" && find . -type f ! -path './node_modules/*' ! -path './dist/*' ! -path './.git/*' ! -path './data/*' ! -path './deployer/*' ! -path './.github/*' ! -name '.env*' ! -name '*.db*' ! -name '*.pem' ! -name '*.key' -print0)
   fi
 }
 count=$(list_files | tr -cd '\0' | wc -c | tr -d ' ')
@@ -148,4 +150,4 @@ else
 fi
 
 [ "$status" = 0 ] || die "The install stopped with an error (exit $status); fix it and run the same command again." "安装因错误而停止（退出码 $status）；解决后请重新运行同一命令。"
-printf '\n%s%s%s\n' "$B" "$(t 'Done. Open the address shown above and sign in with your API key.' '完成。打开上面显示的地址，用你的 API 密钥登录。')" "$N"
+printf '\n%s%s%s\n' "$B" "$(t 'Done. Open the link shown above.' '完成。打开上面显示的链接。')" "$N"

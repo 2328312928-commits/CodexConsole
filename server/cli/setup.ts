@@ -4,6 +4,7 @@ import { MIN_PASSWORD_LENGTH, passwordProblem } from '../auth/passwords.js';
 import { generateTotpSecret, otpauthUri, verifyTotp } from '../auth/totp.js';
 import { ConfigError, loadConfig, loadDotEnv, type AppConfig } from '../config.js';
 import { qrTerminal } from '../lib/qr.js';
+import { setupUrl } from '../auth/setupLink.js';
 import { openStores } from '../runtime.js';
 import { defaultFolderName } from '../services/workspace.js';
 import { Aborted, Prompter } from './prompt.js';
@@ -29,7 +30,7 @@ function parseFlags(argv: string[], t: (k: MessageKey, v?: Vars) => string): Fla
     else if (a === '--new-key') flags.newKey = argv[++i] ?? '';
     else if (a === '--revoke-key') flags.revokeKey = argv[++i] ?? '';
     else if (a === '--lang') flags.lang = argv[++i] === 'zh-CN' ? 'zh-CN' : 'en';
-    else if (a === '--is-set-up') continue;
+    else if (a === '--is-set-up' || a === '--setup-link') continue;
     else {
       console.error(t('cli.unknownOption', { option: a }));
       console.error(t('cli.options'));
@@ -64,6 +65,18 @@ async function main(): Promise<void> {
     const done = stores.owner.exists();
     stores.db.close();
     process.exit(done ? 0 : 1);
+  }
+  // For scripts too: print a new one-time link that finishes setup in the browser.
+  if (argv.includes('--setup-link')) {
+    const done = stores.owner.exists();
+    const link = done ? null : setupUrl(config.publicOrigin, stores.setupLinks.create());
+    stores.db.close();
+    if (!link) {
+      console.error(t('error.setup_already_done'));
+      process.exit(1);
+    }
+    process.stdout.write(`${link}\n`);
+    process.exit(0);
   }
   const prompt = new Prompter();
   const out = (s = '') => process.stdout.write(s + '\n');

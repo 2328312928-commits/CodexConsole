@@ -6,7 +6,7 @@ import { CodexStatusProvider } from './codexStatus';
 import { ErrorAlert, LangSwitch, Spinner } from './components/ui';
 import { Topbar } from './components/Topbar';
 import { useI18n } from './i18n';
-import { SetupPage, SignInPage } from './pages/AuthPages';
+import { SetupWizard, SignInPage } from './pages/AuthPages';
 import { ConsolePage } from './pages/console/ConsolePage';
 import { navigate, usePath } from './router';
 
@@ -73,7 +73,7 @@ export function App() {
     return (
       <div className="app">
         <Topbar auth={auth} />
-        <main className="center-page">{!auth.setupComplete ? <SetupPage /> : <SignInPage onSignedIn={setAuth} />}</main>
+        <main className="center-page">{!auth.setupComplete ? <SetupWizard onDone={setAuth} /> : <SignInPage onSignedIn={setAuth} />}</main>
       </div>
     );
   }

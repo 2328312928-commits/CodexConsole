@@ -2,6 +2,9 @@
 node_modules/
 dist/
 coverage/
+# the deploy program's packaged files and downloaded Node.js binaries
+deployer/release/
+deployer/.cache/
 
 # local configuration and secrets: never commit these
 .env
