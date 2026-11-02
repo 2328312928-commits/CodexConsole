@@ -19,16 +19,33 @@ Either way, a browser still needs one of your API keys, and the admin area your 
 
 ## Windows
 
-1. Unzip `codex-console-windows-x64.zip` (from the project's Releases page, or build it with `npm run package:windows`; right-click → **Extract All**). It contains Node.js, the console with Codex for Windows, and two launchers.
+1. Unzip `codex-console-windows-x64.zip` from the project's Releases page (right-click → **Extract All**). It contains Node.js, the console with Codex for Windows, and two launchers.
 2. Double-click **Start Codex Console.cmd**. If "Windows protected your PC" appears, choose **More info → Run anyway** (the launcher is not signed).
 3. The window shows the address and, the first time, opens the setup page: choose an admin password, scan the QR code with your authenticator app, and save your first key. Then **Admin → Codex → sign in with ChatGPT**.
 4. Keep the window open while you use the console; close it to stop.
 
 Your data stays in `%USERPROFILE%\.codexconsole`, Codex's files in `%USERPROFILE%\codex-workspace`, and Codex's own sign-in in `%USERPROFILE%\.codex`.
 
-To build the package yourself: `npm run package:windows` (on Linux, macOS or Windows; it downloads the official `node.exe`, checks its checksum, and installs the console's Windows dependencies). `-- --tailscale-name my-pc.tail1234.ts.net` writes the address you expect into the launcher, which then warns if Tailscale names the computer differently.
+## macOS
 
-## macOS and Linux
+1. Download `codex-console-macos-arm64.zip` (Apple silicon) or `codex-console-macos-x64.zip` (Intel) and double-click it to unpack. It contains Node.js, the console with Codex for macOS, and two launchers.
+2. Double-click **Start Codex Console.command**; it runs in a Terminal window. The first time, macOS can't verify it: **System Settings → Privacy & Security → Open Anyway** (macOS 14 and earlier: Control-click → **Open**). The launcher clears the download quarantine for its own folder only, so Codex and its helpers aren't blocked one by one.
+3. As on Windows, the window shows the address and, the first time, opens the setup page. **Start Codex Console (tailnet only).command** keeps it private.
+
+Your data stays in `~/.codexconsole`, Codex's files in `~/codex-workspace`, Codex's sign-in in `~/.codex`.
+
+## Linux
+
+```bash
+tar -xzf codex-console-linux-x64.tar.gz   # or codex-console-linux-arm64.tar.gz
+cd codex-console
+./start.sh                                 # public through Funnel
+./start.sh --tailnet-only                  # only your Tailscale devices
+```
+
+Managing Tailscale Serve and Funnel needs root once: `sudo tailscale set --operator=$USER`. To keep it running after you log out, use tmux, screen or a systemd user service (example in the [README](../README.md#linux-x64-or-arm64)).
+
+## From source, and building the packages
 
 ```bash
 npm ci
@@ -37,7 +54,7 @@ npm run tailscale                     # public through Funnel
 npm run tailscale -- --tailnet-only   # only your Tailscale devices
 ```
 
-On Linux, managing Tailscale Serve needs root once: `sudo tailscale set --operator=$USER`.
+`npm run package:portable` builds all five packages into `release/` with `SHA256SUMS.txt` (on Linux, macOS or Windows: it downloads the official Node.js builds, checks their checksums, and installs each platform's own dependencies, so no Mac is needed). `npm run package:windows` builds just Windows; `node scripts/portable.mjs linux-x64` picks platforms. `-- --tailscale-name my-pc.tail1234.ts.net` writes the address you expect into the launchers, which then warn if Tailscale names the computer differently: that is for your own copy only, never for a package you publish.
 
 ## What it does
 

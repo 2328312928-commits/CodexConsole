@@ -11,25 +11,24 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { gzipSync } from 'node:zlib';
 import { inject } from 'postject';
-import { tar, untar } from './tar.mjs';
+import { nodeBinary } from '../../scripts/node-dist.mjs';
+import { tar } from './tar.mjs';
 
-const NODE_VERSION = '24.22.1';
-// Pinned from https://nodejs.org/dist/v24.22.1/SHASUMS256.txt
+// The official Node.js builds come from scripts/node-dist.mjs, pinned to their checksums.
 const TARGETS = {
-  'linux-x64': { file: `node-v${NODE_VERSION}-linux-x64.tar.gz`, sha256: 'eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c', label: 'linux-x64' },
-  'linux-arm64': { file: `node-v${NODE_VERSION}-linux-arm64.tar.gz`, sha256: '33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3', label: 'linux-arm64' },
-  'darwin-x64': { file: `node-v${NODE_VERSION}-darwin-x64.tar.gz`, sha256: 'd132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035', label: 'macos-x64' },
-  'darwin-arm64': { file: `node-v${NODE_VERSION}-darwin-arm64.tar.gz`, sha256: '89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7', label: 'macos-arm64' },
-  'win-x64': { file: 'win-x64/node.exe', sha256: 'd702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5', label: 'windows-x64' },
+  'linux-x64': { label: 'linux-x64' },
+  'linux-arm64': { label: 'linux-arm64' },
+  'darwin-x64': { label: 'macos-x64' },
+  'darwin-arm64': { label: 'macos-arm64' },
+  'win-x64': { label: 'windows-x64' },
 };
 const SENTINEL = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const deployer = path.resolve(here, '..');
 const dist = path.join(deployer, 'dist');
-const cache = path.join(deployer, '.cache', 'node');
 const release = path.join(deployer, 'release');
 const work = path.join(release, '.work');
 
@@ -40,26 +39,6 @@ const canBuild = (target) => !target.startsWith('darwin') || process.platform ==
 function fail(message) {
   console.error(message);
   process.exit(1);
-}
-
-/** The official Node.js binary for a platform, checked against the pinned checksum. */
-async function nodeBinary(target) {
-  const { file, sha256: expected } = TARGETS[target];
-  const cached = path.join(cache, file.endsWith('.exe') ? `node-v${NODE_VERSION}-${target}.exe` : file);
-  let data = fs.existsSync(cached) ? fs.readFileSync(cached) : null;
-  if (!data || sha256(data) !== expected) {
-    console.log(`Downloading Node.js ${NODE_VERSION} for ${target}…`);
-    const res = await fetch(`https://nodejs.org/dist/v${NODE_VERSION}/${file}`);
-    if (!res.ok) throw new Error(`Download of ${file} failed: HTTP ${res.status}`);
-    data = Buffer.from(await res.arrayBuffer());
-    if (sha256(data) !== expected) throw new Error(`Checksum mismatch for ${file}: not the official Node.js file`);
-    fs.mkdirSync(cache, { recursive: true });
-    fs.writeFileSync(cached, data);
-  }
-  if (file.endsWith('.exe')) return data;
-  const member = `node-v${NODE_VERSION}-${target}/bin/node`;
-  for (const entry of untar(gunzipSync(data))) if (entry.name === member) return Buffer.from(entry.data);
-  throw new Error(`${member} is not in ${file}`);
 }
 
 /** Drop a PE file's Authenticode signature: injecting would break it, and a broken one looks worse than none. */

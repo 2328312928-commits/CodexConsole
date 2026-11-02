@@ -15,7 +15,7 @@ function splitName(name) {
   throw new Error(`Path too long for tar: ${name}`);
 }
 
-function header(name, size, mode, mtime) {
+export function tarHeader(name, size, mode, mtime) {
   const h = Buffer.alloc(BLOCK);
   const [prefix, base] = splitName(name);
   h.write(base, 0, 100, 'utf8');
@@ -41,7 +41,7 @@ function header(name, size, mode, mtime) {
 export function tar(files, mtime = Math.floor(Date.now() / 1000)) {
   const parts = [];
   for (const f of files) {
-    parts.push(header(f.name, f.data.length, f.mode ?? 0o644, mtime), f.data);
+    parts.push(tarHeader(f.name, f.data.length, f.mode ?? 0o644, mtime), f.data);
     const pad = (BLOCK - (f.data.length % BLOCK)) % BLOCK;
     if (pad) parts.push(Buffer.alloc(pad));
   }

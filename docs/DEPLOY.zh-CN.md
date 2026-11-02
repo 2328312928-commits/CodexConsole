@@ -23,7 +23,7 @@ Codex 在服务器上运行，并处理服务器上的文件。你用来登录�
 | Intel 处理器的 Mac | `codex-console-deploy-macos-x64.zip` |
 | Linux | `codex-console-deploy-linux-x64.tar.gz` 或 `codex-console-deploy-linux-arm64.tar.gz` |
 
-**获取方式。**从项目的 **Releases** 页面下载适合你电脑的文件。也可以自己生成：`cd deployer && npm ci --ignore-scripts && npm run package -- --all`（需要 Node 22.13 或更新版本；macOS 的文件需要在 Mac 上生成）。在你 fork 的仓库中，**Deploy program** 工作流（`.github/workflows/deploy-program.yml`）会在 GitHub 上生成全部五个文件：在 **Actions** 页运行它，或推送一个标签（例如 `deployer-v0.1.0`）把文件放到草稿版本（draft release）上。`SHA256SUMS.txt` 列出了每个文件的校验和。
+**获取方式。**从项目的 **Releases** 页面下载适合你电脑的文件。也可以自己生成：`cd deployer && npm ci --ignore-scripts && npm run package -- --all`（需要 Node 22.13 或更新版本；macOS 的文件需要在 Mac 上生成）。在你 fork 的仓库中，**Release** 工作流（`.github/workflows/release.yml`）会在 GitHub 上把它们和控制台包一起生成：推送一个标签（例如 `v0.1.0`），所有文件都会放到一个草稿版本（draft release）上。`SHA256SUMS.txt` 列出了每个文件的校验和。
 
 **启动。**它没有用付费证书签名，所以第一次启动需要多点一下：
 

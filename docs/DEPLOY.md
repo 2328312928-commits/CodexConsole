@@ -23,7 +23,7 @@ Codex runs on the server and works on files there. The computer you sign in from
 | Mac with an Intel processor | `codex-console-deploy-macos-x64.zip` |
 | Linux | `codex-console-deploy-linux-x64.tar.gz` or `codex-console-deploy-linux-arm64.tar.gz` |
 
-**Getting it.** Download the file for your computer from the project's **Releases** page. To build them yourself: `cd deployer && npm ci --ignore-scripts && npm run package -- --all` (Node 22.13 or newer; the macOS files need a Mac). In a fork, the **Deploy program** workflow (`.github/workflows/deploy-program.yml`) builds all five on GitHub: run it from the **Actions** tab, or push a tag such as `deployer-v0.1.0` to put them on a draft release. `SHA256SUMS.txt` lists each file's checksum.
+**Getting it.** Download the file for your computer from the project's **Releases** page. To build them yourself: `cd deployer && npm ci --ignore-scripts && npm run package -- --all` (Node 22.13 or newer; the macOS files need a Mac). In a fork, the **Release** workflow (`.github/workflows/release.yml`) builds them on GitHub together with the console packages: push a tag such as `v0.1.0` to put them all on a draft release. `SHA256SUMS.txt` lists each file's checksum.
 
 **Starting it.** It is not signed with a paid certificate, so the first start needs one extra click:
 

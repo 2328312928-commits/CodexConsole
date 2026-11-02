@@ -19,16 +19,33 @@
 
 ## Windows
 
-1. 解压 `codex-console-windows-x64.zip`（从项目的 Releases 页面下载，或用 `npm run package:windows` 生成；右键 → **全部解压缩**）。里面包含 Node.js、带有 Windows 版 Codex 的控制台，以及两个启动文件。
+1. 从项目的 Releases 页面下载 `codex-console-windows-x64.zip` 并解压（右键 → **全部解压缩**）。里面包含 Node.js、带有 Windows 版 Codex 的控制台，以及两个启动文件。
 2. 双击 **Start Codex Console.cmd**。如果出现“Windows 已保护你的电脑”，请选择**更多信息 → 仍要运行**（启动文件没有签名）。
 3. 窗口会显示访问地址；第一次还会打开设置页面：设置管理员密码，用验证器应用扫描二维码，保存你的第一把密钥。然后：**管理后台 → Codex → 用 ChatGPT 登录**。
 4. 使用控制台期间请保持窗口打开；关闭窗口即可停止。
 
 数据保存在 `%USERPROFILE%\.codexconsole`，Codex 的文件在 `%USERPROFILE%\codex-workspace`，Codex 自己的登录信息在 `%USERPROFILE%\.codex`。
 
-自己生成这个包：`npm run package:windows`（在 Linux、macOS 或 Windows 上都可以；它会下载官方的 `node.exe` 并核对校验和，再安装控制台的 Windows 依赖）。加上 `-- --tailscale-name my-pc.tail1234.ts.net` 会把你预期的地址写进启动文件；如果 Tailscale 给这台电脑的名称不同，启动时会提示。
+## macOS
 
-## macOS 和 Linux
+1. 下载 `codex-console-macos-arm64.zip`（Apple 芯片）或 `codex-console-macos-x64.zip`（Intel），双击解压。里面包含 Node.js、带有 macOS 版 Codex 的控制台，以及两个启动文件。
+2. 双击 **Start Codex Console.command**，它会在终端窗口中运行。第一次运行时 macOS 无法验证它：**系统设置 → 隐私与安全性 → 仍要打开**（macOS 14 及更早版本：按住 Control 点按 → **打开**）。启动文件只会清除它自己所在文件夹的下载隔离标记，避免 Codex 及其辅助程序被逐个拦截。
+3. 和 Windows 一样，窗口会显示访问地址，第一次还会打开设置页面。**Start Codex Console (tailnet only).command** 会让地址只对你的设备开放。
+
+数据保存在 `~/.codexconsole`，Codex 的文件在 `~/codex-workspace`，Codex 的登录信息在 `~/.codex`。
+
+## Linux
+
+```bash
+tar -xzf codex-console-linux-x64.tar.gz   # 或 codex-console-linux-arm64.tar.gz
+cd codex-console
+./start.sh                                 # 通过 Funnel 公开
+./start.sh --tailnet-only                  # 只对你的 Tailscale 设备开放
+```
+
+管理 Tailscale Serve 和 Funnel 需要先用 root 授权一次：`sudo tailscale set --operator=$USER`。要在退出登录后继续运行，可以用 tmux、screen 或 systemd 用户服务（示例见 [README](../README.zh-CN.md#linuxx64-或-arm64)）。
+
+## 从源码运行，以及生成控制台包
 
 ```bash
 npm ci
@@ -37,7 +54,7 @@ npm run tailscale                     # 通过 Funnel 公开
 npm run tailscale -- --tailnet-only   # 只对你的 Tailscale 设备开放
 ```
 
-在 Linux 上，管理 Tailscale Serve 需要先用 root 授权一次：`sudo tailscale set --operator=$USER`。
+`npm run package:portable` 会把全部五个控制台包生成到 `release/`，并附带 `SHA256SUMS.txt`（在 Linux、macOS 或 Windows 上都可以：它会下载官方的 Node.js 并核对校验和，再安装每个平台自己的依赖，所以不需要 Mac）。`npm run package:windows` 只生成 Windows 版；`node scripts/portable.mjs linux-x64` 可以指定平台。加上 `-- --tailscale-name my-pc.tail1234.ts.net` 会把你预期的地址写进启动文件；如果 Tailscale 给这台电脑的名称不同，启动时会提示：这只适用于你自己用的那一份，绝不要用于要发布的包。
 
 ## 它会做什么
 
