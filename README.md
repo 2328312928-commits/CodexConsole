@@ -1,6 +1,6 @@
 # Codex Console
 
-A private, single-owner web console for **your own** [Codex CLI](https://github.com/openai/codex), signed in with **your ChatGPT plan** (not API credits). Put it on a server once; then open it in a browser on any of your computers, paste one of your API keys, and you have the full console. Nothing to install on that computer.
+A self-hosted, single-owner web console for **your own** [Codex CLI](https://github.com/openai/codex), signed in with **your ChatGPT plan** (not API credits). Everyone runs their own copy, for themselves: put it on a server once, or run it on your own computer with Tailscale; then open it in a browser on any of your devices, paste one of your API keys, and you have the full console. Nothing to install on those devices.
 
 From your own browsers and phone you can:
 
@@ -17,6 +17,8 @@ From your own browsers and phone you can:
 Every screen is available in **English and 简体中文** (toggle in the top bar), in light and dark. Chinese docs: [README.zh-CN.md](README.zh-CN.md). What Codex offers and where each part lives: [docs/FEATURES.md](docs/FEATURES.md).
 
 > **It is a remote shell.** Codex runs commands on the machine hosting the console. Anyone with one of your keys can do what Codex can do there. Keep keys like passwords, and read [SECURITY.md](SECURITY.md).
+
+> **Unofficial.** An independent open-source project, not affiliated with or endorsed by OpenAI. Codex and ChatGPT are trademarks of OpenAI.
 
 ## How it works
 
@@ -59,13 +61,15 @@ From a terminal, `./deploy/deploy.sh root@203.0.113.7 --ip 203.0.113.7` in this 
 No server needed: the console runs on your own computer, and [Tailscale](https://tailscale.com) gives it a fixed https address such as `https://my-pc.tail1234.ts.net`. By default it is public through Tailscale Funnel, so any browser can open it; `--tailnet-only` keeps it to your own Tailscale devices. Keys, rate limits and the admin password protect it either way.
 
 1. Install Tailscale on the computer, sign in, and in the admin console turn on MagicDNS and **HTTPS Certificates** (once).
-2. **Windows:** unzip `codex-console-windows-x64.zip` and double-click **Start Codex Console.cmd**. **Linux or macOS:** `npm ci && npm run build && npm run tailscale`.
+2. **Windows:** unzip `codex-console-windows-x64.zip` (from the Releases page, or build it with `npm run package:windows`) and double-click **Start Codex Console.cmd**. **Linux or macOS:** `npm ci && npm run build && npm run tailscale`.
 3. The window shows the address. The first time it also opens the setup page (admin password, authenticator, your first key), then: **Admin → Codex → sign in with ChatGPT**.
 4. On any other computer or phone, open the address and sign in with an API key. More keys: **Admin → Keys → New key**.
 
 Everything about it (Funnel or tailnet only, the first start, the Windows package, troubleshooting): **[docs/TAILSCALE.md](docs/TAILSCALE.md)**.
 
 ## Run it on your own machine
+
+You need Node.js 22.13 or newer.
 
 ```bash
 npm ci
@@ -177,7 +181,19 @@ Adding UI text means adding the key to both `shared/i18n/en.ts` and `shared/i18n
 
 ## Notes
 
-- **Personal use only.** This is built for one owner and that owner's own devices. Sharing access to your ChatGPT plan is against OpenAI's terms.
+- **Personal use only.** Each copy is for one owner and that owner's own devices. Don't use it to share your ChatGPT plan with other people: that is against OpenAI's terms.
 - **Usage limits** shown in the dashboard are what Codex reports for your plan. The console does not work around them.
 - **Upgrading Codex:** change `@openai/codex` in `package.json`, run `npm install`, then `npm run codex:check`; on a server, deploy again.
 - **Not included on purpose:** voice / realtime, Windows sandbox setup, Codex cloud and remote-control features (see [docs/FEATURES.md](docs/FEATURES.md)).
+
+## Contributing
+
+Issues and pull requests are welcome. Before sending a change, run `npm test` and `npm run typecheck` (and `cd deployer && npm test` for the deploy program), and give anything the UI shows both English and Chinese text.
+
+## Reporting security issues
+
+Please don't open a public issue for a vulnerability: use this repository's private vulnerability reporting on GitHub (**Security → Report a vulnerability**). What the console protects and how: [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE). Codex itself (the `@openai/codex` package the console installs) is OpenAI's, under its own Apache-2.0 license.

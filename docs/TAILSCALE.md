@@ -19,7 +19,7 @@ Either way, a browser still needs one of your API keys, and the admin area your 
 
 ## Windows
 
-1. Unzip `codex-console-windows-x64.zip` (right-click → **Extract All**). It contains Node.js, the console with Codex for Windows, and two launchers.
+1. Unzip `codex-console-windows-x64.zip` (from the project's Releases page, or build it with `npm run package:windows`; right-click → **Extract All**). It contains Node.js, the console with Codex for Windows, and two launchers.
 2. Double-click **Start Codex Console.cmd**. If "Windows protected your PC" appears, choose **More info → Run anyway** (the launcher is not signed).
 3. The window shows the address and, the first time, opens the setup page: choose an admin password, scan the QR code with your authenticator app, and save your first key. Then **Admin → Codex → sign in with ChatGPT**.
 4. Keep the window open while you use the console; close it to stop.

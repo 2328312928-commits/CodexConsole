@@ -4,6 +4,10 @@
 
 Codex Console is a remote control for a coding agent that runs commands on the server. Treat access to the console like SSH access to that server: whoever is signed in can make Codex read files, run programs and change things. The design goal is that **only the owner, with keys the owner issued to their own devices, can get in**, that the admin area needs more than a key, and that every action leaves a trace.
 
+## Reporting a vulnerability
+
+Please report security problems privately, through this repository's private vulnerability reporting on GitHub (**Security → Report a vulnerability**), not in a public issue.
+
 ## Who can get in
 
 1. **An API key with console access.**

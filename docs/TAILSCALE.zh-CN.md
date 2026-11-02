@@ -19,7 +19,7 @@
 
 ## Windows
 
-1. 解压 `codex-console-windows-x64.zip`（右键 → **全部解压缩**）。里面包含 Node.js、带有 Windows 版 Codex 的控制台，以及两个启动文件。
+1. 解压 `codex-console-windows-x64.zip`（从项目的 Releases 页面下载，或用 `npm run package:windows` 生成；右键 → **全部解压缩**）。里面包含 Node.js、带有 Windows 版 Codex 的控制台，以及两个启动文件。
 2. 双击 **Start Codex Console.cmd**。如果出现“Windows 已保护你的电脑”，请选择**更多信息 → 仍要运行**（启动文件没有签名）。
 3. 窗口会显示访问地址；第一次还会打开设置页面：设置管理员密码，用验证器应用扫描二维码，保存你的第一把密钥。然后：**管理后台 → Codex → 用 ChatGPT 登录**。
 4. 使用控制台期间请保持窗口打开；关闭窗口即可停止。

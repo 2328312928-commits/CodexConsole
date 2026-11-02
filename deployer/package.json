@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Deploys Codex Console to your own server from a page in your browser, without a terminal.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

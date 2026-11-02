@@ -2,8 +2,8 @@
   "name": "codex-console",
   "version": "0.1.0",
   "private": true,
-  "description": "Private, single-owner web console for your own Codex CLI (ChatGPT plan login).",
-  "license": "UNLICENSED",
+  "description": "Self-hosted, single-owner web console for your own Codex CLI (ChatGPT plan login).",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.13"

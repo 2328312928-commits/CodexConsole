@@ -14,6 +14,8 @@ import { zipToFile } from './zip.mjs';
 const NODE_VERSION = '24.22.1';
 // Pinned from https://nodejs.org/dist/v24.22.1/SHASUMS256.txt, as in deployer/scripts/package.mjs.
 const NODE_EXE_SHA256 = 'd702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5';
+// node.exe is shipped on its own, so its license text goes with it (github.com/nodejs/node, tag v24.22.1).
+const NODE_LICENSE_SHA256 = '5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace';
 const CODEX_EXE = 'node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe';
 const ARGON2_PKG = 'node_modules/@node-rs/argon2-win32-x64-msvc';
 
@@ -50,6 +52,18 @@ async function nodeExe() {
   if (sha256(data) !== NODE_EXE_SHA256) fail('Checksum mismatch for node.exe: not the official Node.js file');
   fs.mkdirSync(path.dirname(candidates[0]), { recursive: true });
   fs.writeFileSync(candidates[0], data);
+  return data;
+}
+
+async function nodeLicense() {
+  const cached = path.join(root, '.cache', 'node', `LICENSE-v${NODE_VERSION}`);
+  if (fs.existsSync(cached) && sha256(fs.readFileSync(cached)) === NODE_LICENSE_SHA256) return fs.readFileSync(cached);
+  const res = await fetch(`https://raw.githubusercontent.com/nodejs/node/v${NODE_VERSION}/LICENSE`);
+  if (!res.ok) fail(`Download of the Node.js license failed: HTTP ${res.status}`);
+  const data = Buffer.from(await res.arrayBuffer());
+  if (sha256(data) !== NODE_LICENSE_SHA256) fail('Checksum mismatch for the Node.js license');
+  fs.mkdirSync(path.dirname(cached), { recursive: true });
+  fs.writeFileSync(cached, data);
   return data;
 }
 
@@ -111,6 +125,8 @@ Use it
 
 "Start Codex Console (tailnet only).cmd" keeps the address private to your Tailscale devices.
 Your data stays in %USERPROFILE%\\.codexconsole, Codex's files in %USERPROFILE%\\codex-workspace.
+Licenses: Codex Console is MIT (LICENSE.txt), Node.js has node\\LICENSE.txt, and Codex
+(app\\node_modules\\@openai) is OpenAI's, under Apache-2.0.
 
 
 Codex 控制台 Windows 版
@@ -138,6 +154,8 @@ Codex 控制台 Windows 版
 
 “Start Codex Console (tailnet only).cmd” 会让地址只对你自己的 Tailscale 设备开放。
 数据保存在 %USERPROFILE%\\.codexconsole，Codex 的文件在 %USERPROFILE%\\codex-workspace。
+许可证：Codex 控制台使用 MIT 许可证（LICENSE.txt），Node.js 的许可证见 node\\LICENSE.txt，
+Codex（app\\node_modules\\@openai）属于 OpenAI，使用 Apache-2.0 许可证。
 `;
 
 if (!args.includes('--no-build')) execFileSync(npm, ['run', 'build'], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
@@ -158,6 +176,8 @@ fs.rmSync(path.join(app, 'package-lock.json'));
 
 fs.mkdirSync(path.join(pkg, 'node'), { recursive: true });
 fs.writeFileSync(path.join(pkg, 'node', 'node.exe'), await nodeExe());
+fs.writeFileSync(path.join(pkg, 'node', 'LICENSE.txt'), crlf((await nodeLicense()).toString('utf8')));
+fs.writeFileSync(path.join(pkg, 'LICENSE.txt'), crlf(fs.readFileSync(path.join(root, 'LICENSE'), 'utf8')));
 fs.writeFileSync(path.join(pkg, 'Start Codex Console.cmd'), launcher('', 'Starts Codex Console on this PC with a public address from Tailscale Funnel.'));
 fs.writeFileSync(path.join(pkg, 'Start Codex Console (tailnet only).cmd'), launcher(' --tailnet-only', 'Starts Codex Console on this PC, reachable only from your own Tailscale devices.'));
 fs.writeFileSync(path.join(pkg, 'README.txt'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(crlf(README), 'utf8')]));

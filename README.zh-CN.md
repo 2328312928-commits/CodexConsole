@@ -1,6 +1,6 @@
 # Codex 控制台
 
-一个只属于你自己的 Web 控制台，用来远程使用**你自己的** [Codex CLI](https://github.com/openai/codex)，登录方式是**你的 ChatGPT 套餐**（不消耗 API 额度）。只需把它部署到服务器上一次，之后在你任何一台电脑的浏览器里打开它、粘贴你的一把 API 密钥，就能使用完整控制台，那台电脑上什么都不用装。
+一个自托管、只属于一位所有者的 Web 控制台，用来远程使用**你自己的** [Codex CLI](https://github.com/openai/codex)，登录方式是**你的 ChatGPT 套餐**（不消耗 API 额度）。每个人都运行自己的一份、只给自己用：把它部署到服务器上一次，或者用 Tailscale 在你自己的电脑上运行；之后在你任何一台设备的浏览器里打开它、粘贴你的一把 API 密钥，就能使用完整控制台，那些设备上什么都不用装。
 
 在你自己的浏览器和手机上可以：
 
@@ -17,6 +17,8 @@
 所有界面都有 **English 和简体中文** 两种语言（顶栏可切换），并支持浅色和深色。English docs: [README.md](README.md)。Codex 的全部功能及其在控制台中的位置：[docs/FEATURES.zh-CN.md](docs/FEATURES.zh-CN.md)。
 
 > **这相当于一个远程终端。** Codex 会在运行控制台的机器上执行命令。拿到你任何一把密钥的人，都能在那里做 Codex 能做的事。请像对待密码一样保管密钥，并阅读 [SECURITY.zh-CN.md](SECURITY.zh-CN.md)。
+
+> **非官方项目。**这是一个独立的开源项目，与 OpenAI 没有关联，也未获其认可。Codex 和 ChatGPT 是 OpenAI 的商标。
 
 ## 工作原理
 
@@ -59,13 +61,15 @@
 不需要服务器：控制台运行在你自己的电脑上，[Tailscale](https://tailscale.com) 为它提供一个固定的 https 地址，例如 `https://my-pc.tail1234.ts.net`。默认通过 Tailscale Funnel 公开，任何浏览器都能打开；加上 `--tailnet-only` 则只对你自己的 Tailscale 设备开放。两种方式都由密钥、限流和管理员密码保护。
 
 1. 在这台电脑上安装 Tailscale 并登录，然后在管理后台开启 MagicDNS 和 **HTTPS Certificates**（只需一次）。
-2. **Windows：**解压 `codex-console-windows-x64.zip`，双击 **Start Codex Console.cmd**。**Linux 或 macOS：**`npm ci && npm run build && npm run tailscale`。
+2. **Windows：**解压 `codex-console-windows-x64.zip`（从 Releases 页面下载，或用 `npm run package:windows` 生成），双击 **Start Codex Console.cmd**。**Linux 或 macOS：**`npm ci && npm run build && npm run tailscale`。
 3. 窗口会显示访问地址。第一次还会打开设置页面（管理员密码、验证器和你的第一把密钥），然后：**管理后台 → Codex → 用 ChatGPT 登录**。
 4. 在其他任何电脑或手机上打开这个地址，用 API 密钥登录。更多密钥：**管理后台 → 密钥 → 新建密钥**。
 
 全部细节（Funnel 或仅限 tailnet、第一次启动、Windows 包、故障排查）：**[docs/TAILSCALE.zh-CN.md](docs/TAILSCALE.zh-CN.md)**。
 
 ## 在自己的电脑上运行
+
+需要 Node.js 22.13 或更新版本。
 
 ```bash
 npm ci
@@ -177,7 +181,19 @@ cd deployer && npm test       # 部署程序的测试（针对模拟的 SSH 服�
 
 ## 说明
 
-- **仅限个人使用。**它是为一位所有者及其自己的设备设计的。与他人共享你的 ChatGPT 套餐违反 OpenAI 的条款。
+- **仅限个人使用。**每一份都只属于一位所有者及其自己的设备。不要用它和别人共享你的 ChatGPT 套餐：这违反 OpenAI 的条款。
 - 管理后台中显示的**用量限制**是 Codex 为你的套餐报告的数据。控制台不会绕过它们。
 - **升级 Codex：**修改 `package.json` 中的 `@openai/codex`，运行 `npm install`，再运行 `npm run codex:check`；在服务器上则重新部署。
 - **有意不包含：**语音 / 实时对话、Windows 沙箱设置、Codex 云端和远程控制功能（见 [docs/FEATURES.zh-CN.md](docs/FEATURES.zh-CN.md)）。
+
+## 参与贡献
+
+欢迎提交 issue 和 pull request。提交改动前请运行 `npm test` 和 `npm run typecheck`（部署程序还要运行 `cd deployer && npm test`），界面上显示的任何文字都要同时提供英文和中文。
+
+## 报告安全问题
+
+请不要用公开的 issue 报告漏洞：请使用本仓库在 GitHub 上的私密漏洞报告（**Security → Report a vulnerability**）。控制台保护什么、如何保护：见 [SECURITY.zh-CN.md](SECURITY.zh-CN.md)。
+
+## 许可证
+
+[MIT](LICENSE)。控制台安装的 Codex 本身（`@openai/codex` 软件包）属于 OpenAI，使用它自己的 Apache-2.0 许可证。
